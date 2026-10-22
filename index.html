@@ -1,0 +1,1252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>BOB</title>
+<meta name="theme-color" content="#0c2340">
+<meta name="description" content="BOB, Budget on Board: plan the whole trip around your budget.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="BOB">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<script>
+/* Standalone mode: replaces Claude's in-artifact AI with this app's own server function (/api/bob). */
+(function(){
+  if (window.claude) return;
+  window.BOB_SERVER_SEARCH = true;
+  const getCode = () => { try { return localStorage.getItem("bob-code") || ""; } catch(e) { return ""; } };
+  const setCode = c => { try { localStorage.setItem("bob-code", c); } catch(e) {} };
+  async function call(input, quick){
+    const messages = typeof input === "string" ? [{role:"user", content:input}] : input;
+    let r;
+    try { r = await fetch("/api/bob", {method:"POST", headers:{"content-type":"application/json","x-bob-code":getCode()}, body:JSON.stringify({messages, quick:!!quick})}); }
+    catch(e) { throw {code:"upstream_error", message:"No internet connection."}; }
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 401) { const c = window.prompt("Enter the BOB access code"); if (c) setCode(c.trim()); throw {code:"not_granted"}; }
+    if (r.status === 404 || d.error === "no_key") throw {code:"sampling_disabled"};
+    if (!r.ok) throw {code:"upstream_error", message:d.message || d.error || ("HTTP " + r.status)};
+    return d;
+  }
+  const sample = async (input, opts = {}) => { const d = await call(input, opts.modelTier === "quick"); if (opts.onText) opts.onText({text:d.text, delta:d.text}); return {text:d.text, truncated:!!d.truncated, modelTierApplied:"default"}; };
+  sample.json = async (input, opts = {}) => {
+    const d = await call(input, opts.modelTier === "quick"); const t = String(d.text || "");
+    const tries = [t, (t.match(/```(?:json)?\s*([\s\S]*?)```/) || [])[1], (() => { const a = t.search(/[\[{]/), b = Math.max(t.lastIndexOf("}"), t.lastIndexOf("]")); return a >= 0 && b > a ? t.slice(a, b + 1) : null; })()];
+    for (const x of tries) { if (!x) continue; try { return JSON.parse(x); } catch(e) {} }
+    throw {code:"invalid_json", text:t};
+  };
+  sample.limits = async () => ({maxPromptBytes: 262144});
+  window.claude = { use: async name => name === "sample" ? sample : null };
+  if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+})();
+</script>
+</head>
+<body>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@800;900&family=Figtree:wght@400;500;600;700;800&display=swap">
+<style>
+/* Layout: one phone-width app column floating on the BOB sky, navy app cards, bottom tab bar. Single deliberate look from the Canva pitch. */
+:root{
+  --sky-top:#3f8fdc; --sky-bot:#bfe1fb; --navy:#0c2340; --navy-2:#13325a; --navy-3:#1c4373;
+  --ink:#eef5ff; --muted:#9db7d6; --accent:#5cc8f5; --accent-ink:#06223d;
+  --good:#4fd39a; --warn:#ffc65c; --bad:#ff7b72; --line:rgba(255,255,255,.12);
+  --display:"Playfair Display", "Times New Roman", Georgia, serif;
+  --body:"Figtree", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font-family:var(--body);color:var(--ink);font-size:15px;line-height:1.45;
+  background:
+    radial-gradient(60% 18% at 15% 92%, rgba(255,255,255,.85), transparent 70%),
+    radial-gradient(50% 16% at 90% 96%, rgba(255,255,255,.8), transparent 70%),
+    radial-gradient(40% 12% at 70% 20%, rgba(255,255,255,.35), transparent 70%),
+    linear-gradient(180deg,var(--sky-top),var(--sky-bot)) fixed;
+  background-color:var(--sky-top);
+}
+.wrap{max-width:480px;margin:0 auto;padding-inline:16px;padding-block:18px 110px;display:flex;flex-direction:column;gap:16px}
+.top{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.logo{font-family:var(--display);font-weight:900;font-size:34px;letter-spacing:.02em;color:#fff;text-shadow:0 2px 14px rgba(12,35,64,.35);margin:0;cursor:pointer;background:none;border:0;padding:0}
+.tag{font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:#fff;opacity:.9;font-weight:700}
+.card{background:var(--navy);border-radius:22px;padding:18px;box-shadow:0 18px 40px rgba(12,35,64,.28);display:flex;flex-direction:column;gap:14px;min-width:0}
+.sub{background:var(--navy-2);border-radius:14px;padding:12px 14px;min-width:0}
+h1,h2,h3{margin:0;text-wrap:balance}
+h1{font-family:var(--display);font-weight:900;font-size:clamp(40px,12vw,58px);line-height:1;color:#fff}
+h2{font-size:20px;font-weight:800}
+h3{font-size:15px;font-weight:700}
+.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);font-weight:700}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+.num{font-variant-numeric:tabular-nums}
+button,.btn{font:inherit;cursor:pointer;border:0;border-radius:14px;padding:13px 16px;font-weight:700}
+.btn-primary{background:var(--accent);color:var(--accent-ink)}
+.btn-primary:hover{filter:brightness(1.07)}
+.btn-ghost{background:var(--navy-3);color:var(--ink)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #fff;outline-offset:2px}
+button:disabled{opacity:.55;cursor:default}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row>*{flex:1 1 140px}
+label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--muted)}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--navy-2);border:1px solid var(--line);border-radius:12px;padding:12px;width:100%}
+.seg{display:flex;gap:6px;background:var(--navy-2);border-radius:14px;padding:4px}
+.seg button{flex:1;padding:9px 6px;background:transparent;color:var(--muted);border-radius:10px;font-size:13px}
+.tripseg{background:var(--navy)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.hero{position:relative;border-radius:22px;overflow:hidden;padding:26px 20px 22px;color:#fff;
+  background:linear-gradient(160deg,rgba(12,35,64,.15),rgba(12,35,64,.85)),
+    linear-gradient(200deg,#7cc0ee 0%,#4c86b8 35%,#2f5d4a 60%,#20402f 100%);display:flex;flex-direction:column;gap:12px}
+.hero svg{position:absolute;inset:auto 0 0 0;width:100%;height:55%;opacity:.55}
+.hero>*{position:relative}
+.total{white-space:nowrap;font-size:clamp(30px,9vw,40px);font-weight:800;line-height:1}
+.bar{height:10px;border-radius:99px;background:var(--navy-3);overflow:hidden}
+.bar>span{display:block;height:100%;border-radius:99px;background:var(--good)}
+.cats{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px}
+.cat{background:var(--navy-2);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:2px}
+.cat b{font-size:16px}
+.pill{display:inline-block;font-size:11px;font-weight:800;padding:4px 9px;border-radius:99px;letter-spacing:.04em}
+.pill.good{background:rgba(79,211,154,.16);color:var(--good)}
+.pill.bad{background:rgba(255,123,114,.16);color:var(--bad)}
+.pill.est{background:rgba(255,198,92,.14);color:var(--warn)}
+.list{display:flex;flex-direction:column;gap:10px;margin:0;padding:0;list-style:none}
+.decision{border-left:3px solid var(--accent);padding-left:12px;display:flex;flex-direction:column;gap:3px}
+.decision .save{color:var(--good);font-weight:700;font-size:13px}
+.day{display:grid;grid-template-columns:44px 1fr auto;gap:10px;align-items:start}
+.day .d{background:var(--navy-3);border-radius:10px;text-align:center;padding:6px 0;font-weight:800;font-size:13px}
+.day .d small{display:block;font-size:10px;color:var(--muted);font-weight:700}
+.steps{display:flex;flex-direction:column;gap:10px;list-style:none;margin:0;padding:0}
+.steps li{display:flex;gap:10px;align-items:center;color:var(--muted)}
+.steps li.done{color:var(--ink)}
+.steps li::before{content:"";width:18px;height:18px;border-radius:50%;border:2px solid var(--navy-3);flex:none}
+.steps li.done::before{background:var(--good);border-color:var(--good)}
+.steps li.now::before{border-color:var(--accent);border-top-color:transparent;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.globe{width:120px;height:120px;border-radius:50%;margin:6px auto;background:radial-gradient(circle at 35% 30%,#8fd3ff,#2a6bb0 55%,#0c2340 100%);box-shadow:0 0 50px rgba(92,200,245,.45);animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{50%{transform:scale(1.04)}}
+.chatlog{display:flex;flex-direction:column;gap:10px;max-height:52vh;overflow-y:auto;padding-right:4px}
+.msg{max-width:86%;padding:10px 13px;border-radius:16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.bob{background:var(--navy-2);align-self:flex-start;border-bottom-left-radius:4px}
+.msg.me{background:var(--accent);color:var(--accent-ink);align-self:flex-end;border-bottom-right-radius:4px}
+.msg.sys{align-self:center;background:transparent;color:var(--good);font-size:12px;font-weight:700;padding:2px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chips button{background:var(--navy-2);color:var(--ink);font-weight:600;font-size:12px;padding:8px 11px;border-radius:99px}
+.composer{display:flex;gap:8px}
+.composer textarea{resize:none;height:48px}
+.composer button{flex:none}
+.exp{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.exp:last-child{border-bottom:0}
+.note{font-size:12px;color:var(--warn)}
+.bkgroup{display:flex;flex-direction:column;gap:10px}
+.bkgroup h3{margin-top:6px}
+.bkitem{background:var(--navy-2);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:8px;border:2px solid transparent}
+.bkitem.done{border-color:var(--good)}
+.bkhead{display:grid;grid-template-columns:30px 1fr auto;gap:10px;align-items:start}
+.bknum{width:30px;height:30px;border-radius:50%;background:var(--navy-3);display:grid;place-items:center;font-weight:800;font-size:13px}
+.bkitem.done .bknum{background:var(--good);color:var(--accent-ink)}
+.bkprice{font-size:17px}
+.bkacts{display:flex;gap:8px;flex-wrap:wrap}
+.bkacts>*{flex:1 1 150px;font-size:14px;padding:11px 12px}
+.bkdone{display:flex;justify-content:space-between;align-items:center;color:var(--good);font-weight:800}
+.bkdone button{background:none;color:var(--muted);font-weight:600;font-size:12px;padding:4px}
+.bk{display:grid;grid-template-columns:28px 1fr auto;gap:4px 12px;align-items:start;padding:12px 0;border-bottom:1px solid var(--line)}
+.bk:last-child{border-bottom:0}
+.bk input{width:22px;height:22px;margin:2px 0 0;accent-color:var(--good)}
+.bk .go{grid-column:2 / 4;display:inline-block;text-decoration:none;background:var(--navy-3);color:var(--ink);font-weight:700;font-size:13px;padding:9px 12px;border-radius:12px;justify-self:start}
+.bk .go:hover{background:var(--accent);color:var(--accent-ink)}
+.bk.done b{text-decoration:line-through;opacity:.6}
+a.btn-primary{display:block;text-align:center;text-decoration:none;border-radius:14px;padding:13px 16px;font-weight:700}
+nav{position:fixed;left:0;right:0;bottom:0;padding:8px 12px calc(8px + env(safe-area-inset-bottom,0px));background:rgba(12,35,64,.94);backdrop-filter:blur(8px);display:flex;justify-content:center;z-index:5}
+nav .in{max-width:480px;width:100%;display:flex;gap:4px}
+nav button{flex:1;background:transparent;color:var(--muted);padding:8px 2px;font-size:11px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:3px;border-radius:12px}
+nav button svg{width:22px;height:22px}
+nav button[aria-current="page"]{color:var(--accent)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+[hidden]{display:none!important}
+.expform{display:flex;flex-direction:column;gap:12px;background:var(--card-2,rgba(255,255,255,.06));border:1px solid var(--line);border-radius:18px;padding:14px}
+.explist{display:flex;flex-direction:column}
+.exrow{display:grid;grid-template-columns:1fr auto auto;gap:6px 12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.exrow:first-child{border-top:0}
+.exam{font-weight:800;white-space:nowrap}
+.exdel{background:var(--card-2,rgba(255,255,255,.06));color:var(--muted);width:36px;height:36px;padding:0;display:grid;place-items:center;border-radius:12px}
+.exdel:hover{color:var(--bad);background:rgba(255,123,114,.12)}
+.exconfirm{grid-column:1 / -1;display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap;background:rgba(255,123,114,.08);border-radius:12px;padding:8px 10px}
+.exconfirm span{margin-right:auto}
+.exconfirm button{padding:8px 12px;font-size:13px}
+.exdel-yes{background:var(--bad);color:#2a0705}
+.plusbtn{width:34px;height:34px;padding:0;border-radius:50%;font-size:20px;line-height:1;background:linear-gradient(135deg,#8fe2ff,#46b3ef);color:#04213c;display:grid;place-items:center}
+.plusbtn[aria-expanded="true"]{transform:rotate(45deg)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stats>div{background:var(--card-2,rgba(255,255,255,.06));border:1px solid var(--line);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.stats b{font-size:clamp(16px,4.6vw,21px);font-weight:800;white-space:nowrap}
+.stats .eyebrow{font-size:10px}
+.dualbar{position:relative;height:10px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+.dualbar span{position:absolute;left:0;top:0;bottom:0;border-radius:99px}
+.dualbar .pl{background:rgba(127,220,255,.35)}
+.dualbar .sp{background:linear-gradient(90deg,#4fd39a,#8ff0c4)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.dot.pl{background:rgba(127,220,255,.6)}.dot.sp{background:#4fd39a}
+.nextstep{display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left;width:100%;background:linear-gradient(135deg,rgba(143,226,255,.16),rgba(70,179,239,.08));border:1px solid rgba(127,220,255,.35);color:var(--ink);border-radius:18px;padding:14px 16px;position:relative}
+.nextstep::after{content:"›";position:absolute;right:16px;top:50%;transform:translateY(-50%);font-size:26px;color:#8fe2ff}
+.nextstep b{font-size:16px;padding-right:24px}
+.quick{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.quick button{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 4px;font-size:12px;background:var(--card-2,rgba(255,255,255,.06));border:1px solid var(--line);color:var(--ink);border-radius:16px}
+.quick button:hover{background:rgba(127,220,255,.14)}
+.quick svg{width:22px;height:22px;color:#8fe2ff}
+.savebadge{align-self:flex-start;background:rgba(79,211,154,.14);color:var(--good);font-weight:800;padding:6px 12px;border-radius:99px;font-size:14px}
+.how{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px;counter-reset:how}
+.how li{display:grid;grid-template-columns:34px 1fr;gap:2px 12px;counter-increment:how}
+.how li::before{content:counter(how);grid-row:span 2;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:800;background:rgba(127,220,255,.14);color:#bfeaff;border:1px solid rgba(127,220,255,.4)}
+.how span{color:var(--muted);font-size:13px}
+.hero{min-height:300px}
+.rmtrip{display:inline-flex;align-items:center;gap:8px;background:none;color:var(--muted);font-weight:600;font-size:13px;padding:6px 0;align-self:flex-start}
+.rmtrip:hover{color:var(--bad)}
+.empty{align-items:flex-start}
+.empty svg{width:120px;height:60px}
+.calstrip{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x mandatory}
+.calday{flex:0 0 96px;scroll-snap-align:start;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:10px;border-radius:16px;background:var(--card-2,rgba(255,255,255,.06));border:1px solid var(--line);color:var(--ink)}
+.calday .cd-w{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:700}
+.calday b{font-size:15px}
+.calday .cd-t{font-size:11px;color:var(--muted);line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.calday .cd-c{font-size:11px;color:var(--good);font-weight:700}
+.calday.on{background:linear-gradient(135deg,rgba(143,226,255,.28),rgba(70,179,239,.18));border-color:rgba(127,220,255,.6)}
+.calday.dropover,.tl.dropover{outline:2px dashed #8fe2ff;outline-offset:2px}
+.dayhead{display:flex;gap:12px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap}
+.tl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ev{display:grid;grid-template-columns:54px 1fr;gap:10px;align-items:stretch;cursor:grab}
+.ev.dragging{opacity:.45}
+.ev-time{display:flex;flex-direction:column;align-items:flex-end;padding-top:12px;font-size:12px;color:var(--muted)}
+.ev-time b{color:var(--ink);font-size:14px}
+.ev-body{background:var(--card-2,rgba(255,255,255,.06));border:1px solid var(--line);border-left:4px solid var(--c);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.ev-top{display:flex;justify-content:space-between;gap:8px}
+.ev-type{font-size:10px;text-transform:uppercase;letter-spacing:.12em;font-weight:800;color:var(--c)}
+.ev-cost{font-size:12px;font-weight:800}
+.ev-ctl{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.ev-ctl button,.ev-ctl select{font-size:12px;padding:6px 9px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid var(--line);color:var(--ink);width:auto}
+.ev-ctl button:disabled{opacity:.3}
+.ev-ctl .ev-del{margin-left:auto;color:var(--muted)}
+.ev-ctl .ev-del:hover{color:var(--bad)}
+nav button{font-size:10px}
+.ev-ctl select{max-width:112px;padding:6px 6px}
+.ev-ctl{align-items:center}
+.lockup{justify-content:flex-start;align-items:center;gap:14px}
+.slogan{display:flex;flex-direction:column;gap:2px;padding-left:14px;border-left:2px solid rgba(255,255,255,.55);color:#fff;text-shadow:0 1px 10px rgba(12,35,64,.35)}
+.slogan b{font-family:var(--display);font-weight:800;font-size:18px;line-height:1.1;letter-spacing:.01em}
+.slogan span{font-size:10px;text-transform:uppercase;letter-spacing:.2em;font-weight:700;opacity:.92}
+/* ---- aesthetic pass: glass cards on a Dolomites sky, layered ridges, timeline itinerary ---- */
+:root{--card:rgba(9,27,52,.80);--card-2:rgba(255,255,255,.055);--card-3:rgba(255,255,255,.09);--glow:#7fdcff;--line:rgba(255,255,255,.09)}
+body{background:
+  radial-gradient(70% 40% at 80% 0%, rgba(255,226,184,.45), transparent 60%),
+  radial-gradient(60% 30% at 10% 15%, rgba(255,255,255,.35), transparent 70%),
+  linear-gradient(180deg,#3b86d4 0%,#69abe6 38%,#a9d3f4 70%,#d6ecfb 100%);background-color:#3b86d4}
+.scenery{position:fixed;left:0;right:0;bottom:0;height:46vh;z-index:-1;pointer-events:none}
+.scenery svg{width:100%;height:100%;display:block}
+.wrap{gap:18px;padding-block:22px 120px}
+.logo{font-size:38px;letter-spacing:.06em}
+.tag{font-size:11px;letter-spacing:.22em;opacity:.95}
+.card{background:var(--card);backdrop-filter:blur(18px) saturate(140%);-webkit-backdrop-filter:blur(18px) saturate(140%);
+  border:1px solid rgba(255,255,255,.08);border-radius:26px;padding:20px;box-shadow:0 30px 60px -24px rgba(6,22,44,.65);animation:rise .45s ease both}
+@keyframes rise{from{transform:translateY(8px)}to{transform:none}}
+.sub,.cat{background:var(--card-2);border:1px solid var(--line)}
+.sub{border-radius:16px}
+h2{font-family:var(--display);font-weight:800;font-size:26px;letter-spacing:-.005em;line-height:1.15}
+h3{font-size:13px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);font-weight:800}
+.eyebrow{color:#9fc4e8;letter-spacing:.16em}
+input,select,textarea{background:var(--card-2);border:1px solid rgba(255,255,255,.12);border-radius:14px;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{border-color:var(--glow)}
+.btn-primary{background:linear-gradient(135deg,#8fe2ff 0%,#46b3ef 100%);color:#04213c;box-shadow:0 10px 24px -10px rgba(70,179,239,.9);transition:transform .12s,box-shadow .12s}
+.btn-primary:hover{filter:none;transform:translateY(-1px);box-shadow:0 14px 28px -10px rgba(70,179,239,1)}
+.btn-ghost{background:var(--card-3);border:1px solid rgba(255,255,255,.1)}
+.btn-ghost:hover{background:rgba(255,255,255,.14)}
+.seg{background:var(--card-2);border:1px solid var(--line);border-radius:16px}
+.tripseg{background:rgba(9,27,52,.7);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-color:rgba(255,255,255,.12)}
+.seg button[aria-pressed="true"]{background:linear-gradient(135deg,#8fe2ff,#46b3ef);color:#04213c;box-shadow:0 6px 16px -8px rgba(70,179,239,.9)}
+.hero{border-radius:28px;padding:30px 22px 26px;min-height:340px;justify-content:flex-end;
+  background:linear-gradient(180deg,#5b8fd0 0%,#e0a98f 58%,#f3c9a2 100%);box-shadow:0 30px 60px -24px rgba(6,22,44,.6)}
+.hero svg{height:72%;opacity:1}
+.hero::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 35%,rgba(9,27,52,.78) 100%)}
+.hero>*{z-index:1}
+.hero h1{font-size:clamp(42px,13vw,60px);letter-spacing:-.01em;text-shadow:0 4px 24px rgba(6,22,44,.35)}
+.total{font-weight:800;letter-spacing:-.02em}
+.bar{height:8px;background:rgba(255,255,255,.08)}
+.bar>span{background:linear-gradient(90deg,#4fd39a,#8ff0c4)!important}
+.bar>span[style*="--bad"],.bar>span[style*="ff7b72"]{background:linear-gradient(90deg,#ff7b72,#ffb199)!important}
+.cats{gap:10px}
+.cat{border-radius:16px;padding:12px}
+.cat b{font-size:18px}
+.pill{letter-spacing:.06em;text-transform:uppercase;font-size:10px;padding:5px 10px}
+.decision{border-left:0;padding:14px 14px 14px 16px;background:var(--card-2);border:1px solid var(--line);border-radius:16px;position:relative}
+.decision::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:3px;background:linear-gradient(#8fe2ff,#46b3ef)}
+/* itinerary as a timeline */
+.list:has(.day){gap:0;position:relative}
+.day{grid-template-columns:40px 1fr auto;padding:10px 0;position:relative}
+.day::before{content:"";position:absolute;left:19px;top:0;bottom:0;width:2px;background:rgba(127,220,255,.22)}
+.day:first-child::before{top:22px}.day:last-child::before{bottom:calc(100% - 22px)}
+.day .d{position:relative;z-index:1;width:40px;height:40px;border-radius:50%;padding:0;display:grid;place-items:center;align-content:center;background:#0f2c52;border:2px solid rgba(127,220,255,.55);font-size:15px;line-height:1}
+.day .d small{font-size:8px;letter-spacing:.1em}
+.msg{border-radius:18px;line-height:1.5;box-shadow:0 6px 16px -10px rgba(0,0,0,.6)}
+.msg.bob{background:var(--card-3);border:1px solid var(--line)}
+.msg.me{background:linear-gradient(135deg,#8fe2ff,#46b3ef)}
+.chips button{background:var(--card-2);border:1px solid rgba(255,255,255,.12);transition:background .15s}
+.chips button:hover{background:rgba(127,220,255,.16)}
+.bkitem{background:var(--card-2);border:1px solid var(--line)}
+.bkitem.done{border-color:rgba(79,211,154,.7);background:rgba(79,211,154,.07)}
+.bknum{background:rgba(127,220,255,.14);color:#bfeaff}
+nav{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));padding:6px;border-radius:24px;max-width:456px;margin:0 auto;
+  background:rgba(9,27,52,.82);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);border:1px solid rgba(255,255,255,.1);box-shadow:0 18px 40px -14px rgba(6,22,44,.7)}
+nav button{border-radius:18px;padding:9px 2px}
+nav button[aria-current="page"]{background:rgba(127,220,255,.14);color:#bfeaff}
+table th{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.1em;padding-bottom:6px}
+@media (prefers-reduced-motion:reduce){.card{animation:none}}
+</style>
+
+<div class="scenery" aria-hidden="true">
+  <svg viewBox="0 0 1440 420" preserveAspectRatio="xMidYMax slice">
+    <defs>
+      <linearGradient id="r1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9cc9ec"/><stop offset="1" stop-color="#c9e4f8"/></linearGradient>
+      <linearGradient id="r2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6b9fcc"/><stop offset="1" stop-color="#8fb9dd"/></linearGradient>
+      <linearGradient id="r3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2f5f8f"/><stop offset="1" stop-color="#1f4670"/></linearGradient>
+    </defs>
+    <path d="M0 250 L120 170 L200 215 L320 110 L410 190 L500 140 L600 210 L720 90 L800 160 L900 120 L1010 200 L1120 105 L1220 175 L1330 130 L1440 190 L1440 420 L0 420Z" fill="url(#r1)"/>
+    <path d="M320 110 L345 128 L332 126 L320 140 L306 127 Z M720 90 L748 112 L733 110 L720 124 L706 111 Z M1120 105 L1146 126 L1132 124 L1120 137 L1107 123 Z" fill="#f4faff" opacity=".9"/>
+    <path d="M0 300 L90 250 L180 285 L290 215 L380 270 L470 230 L560 290 L660 235 L760 280 L860 225 L960 285 L1070 240 L1170 290 L1290 235 L1440 275 L1440 420 L0 420Z" fill="url(#r2)"/>
+    <path d="M0 360 L140 320 L260 350 L400 310 L540 355 L700 320 L860 360 L1010 325 L1160 358 L1300 330 L1440 352 L1440 420 L0 420Z" fill="url(#r3)"/>
+  </svg>
+</div>
+<div class="wrap">
+  <div class="top lockup">
+    <button class="logo" id="logoBtn" aria-label="BOB, Budget on Board. Home">BOB</button>
+    <span class="slogan"><b>Budget on Board</b><span>explore more, spend less</span></span>
+  </div>
+
+  <!-- HOME -->
+  <section id="v-home" class="view">
+    <div class="hero">
+      <svg viewBox="0 0 400 200" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+        <defs><linearGradient id="hm1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6c7a8"/><stop offset=".55" stop-color="#b98fa6"/><stop offset="1" stop-color="#5d6f9a"/></linearGradient>
+        <linearGradient id="hm2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34557f"/><stop offset="1" stop-color="#14304f"/></linearGradient></defs>
+        <circle cx="300" cy="70" r="26" fill="#ffe2b8" opacity=".55"/>
+        <path d="M0 200 L0 120 L40 95 L70 112 L118 40 L140 62 L150 52 L188 108 L220 80 L262 128 L300 58 L322 78 L360 64 L400 100 L400 200Z" fill="url(#hm1)"/>
+        <path d="M118 40 L132 54 L124 53 L118 62 L111 52Z M300 58 L312 70 L305 69 L300 76 L294 68Z" fill="#fff6ee"/>
+        <path d="M0 200 L0 160 L60 135 L110 150 L170 118 L230 152 L290 128 L350 150 L400 135 L400 200Z" fill="url(#hm2)"/>
+      </svg>
+      <span class="eyebrow" style="color:#e6f3ff">Bob · the friend who's got the budget</span>
+      <h1>Explore more.<br>Spend less.</h1>
+      <p style="margin:0;max-width:34ch">Any destination, any budget. Bob checks real prices, plans the whole stay and keeps count of every euro.</p>
+      <div class="row">
+        <button class="btn-primary" data-go="plan">Plan a trip</button>
+        <button class="btn-ghost" data-go="chat">Ask Bob</button>
+      </div>
+    </div>
+    <div class="card" id="homeTrip" style="margin-top:18px"></div>
+    <div class="card" id="homeSmart" style="margin-top:18px"></div>
+    <div class="card" id="homeHow" style="margin-top:18px">
+      <span class="eyebrow">How Bob works</span>
+      <ol class="how">
+        <li><b>Tell Bob the basics</b><span>Where, when, who's coming and your budget.</span></li>
+        <li><b>Bob checks real prices</b><span>He reads the official websites live and compares passes, stays and tickets over your whole trip.</span></li>
+        <li><b>Book and travel together</b><span>One list with every booking link, a shared wallet, and Bob on call when plans change.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- PLAN -->
+  <section id="v-plan" class="view" hidden>
+    <div class="seg tripseg" style="margin-bottom:16px"><button type="button" data-go="trip" aria-pressed="false">My current trip</button><button type="button" aria-pressed="true">Start a new trip</button></div>
+    <form class="card" id="planForm">
+      <div><span class="eyebrow">New trip</span><h2>Plan your trip</h2></div>
+      <label for="f-dest">Where are you going?<input id="f-dest" required placeholder="e.g. Dolomites, Italy" value="Dolomites, Italy"></label>
+      <label for="f-from">Travelling from<input id="f-from" placeholder="e.g. Osnabrück" value="Munich"></label>
+      <div class="row">
+        <label for="f-days">Days<input id="f-days" type="number" min="1" max="30" value="7" required></label>
+        <label for="f-people">People<input id="f-people" type="number" min="1" max="20" value="2" required></label>
+      </div>
+      <div class="row">
+        <label for="f-budget">Total budget (EUR)<input id="f-budget" type="number" min="50" step="10" value="1500" required></label>
+        <label for="f-start">Start date<input id="f-start" type="date" value="2027-07-06" required></label>
+      </div>
+      <div><div class="eyebrow" style="margin-bottom:6px">Travel style</div>
+        <div class="seg" id="styleSeg">
+          <button type="button" data-style="Budget" aria-pressed="true">Budget</button>
+          <button type="button" data-style="Balanced" aria-pressed="false">Balanced</button>
+          <button type="button" data-style="Comfort" aria-pressed="false">Comfort</button>
+        </div>
+      </div>
+      <label for="f-extra">Anything Bob should know? (optional)<textarea id="f-extra" rows="2" placeholder="e.g. we love hiking, no car, vegetarian"></textarea></label>
+      <label for="f-demo" id="demoWrap" style="flex-direction:row;align-items:center;gap:10px;color:var(--ink)"><input type="checkbox" id="f-demo" checked style="width:20px;height:20px;accent-color:#46b3ef"> Use the saved Dolomites demo (instant, no live research)</label>
+      <button class="btn-primary" type="submit" id="planBtn">Let Bob plan my trip</button>
+      <p class="note" id="planErr" hidden></p>
+    </form>
+  </section>
+
+  <!-- LOADING -->
+  <section id="v-loading" class="view" hidden>
+    <div class="card" style="text-align:center">
+      <h2 id="loadTitle">Bob is planning your trip</h2>
+      <div class="globe" aria-hidden="true"></div>
+      <ul class="steps" id="steps" style="text-align:left"></ul>
+      <div id="agentLog" class="small" style="text-align:left;display:flex;flex-direction:column;gap:4px;max-height:180px;overflow:auto"></div>
+      <button class="btn-ghost" id="stopPlan">Stop</button>
+    </div>
+  </section>
+
+  <!-- TRIP -->
+  <section id="v-trip" class="view" hidden>
+    <div class="seg tripseg" style="margin-bottom:16px"><button type="button" aria-pressed="true">My current trip</button><button type="button" data-go="plan" aria-pressed="false">Start a new trip</button></div>
+    <div id="tripBody" style="display:flex;flex-direction:column;gap:16px"></div>
+  </section>
+
+  <!-- CHAT -->
+  <section id="v-chat" class="view" hidden>
+    <div class="card">
+      <div><span class="eyebrow">The guy in your group who's got the budget</span><h2>Chat with Bob</h2></div>
+      <div class="chatlog" id="chatlog" aria-live="polite"></div>
+      <div class="chips" id="chips">
+        <button data-demo="cheaper">Make my trip 50 € cheaper</button>
+        <button data-demo="rain">It's going to rain tomorrow. Change my plan.</button>
+        <button data-demo="spent">I spent 30 € more today. Keep the rest in budget.</button>
+        <button data-demo="pass">Is the transit pass worth it?</button>
+        <button>Look up the current Seceda cable car price</button>
+        <button data-demo="book">I'm happy. Let's book.</button>
+      </div>
+      <form class="composer" id="chatForm">
+        <textarea id="chatIn" placeholder="Ask Bob or tell him what you spent" aria-label="Message to Bob"></textarea>
+        <button class="btn-primary" id="sendBtn" type="submit">Send</button>
+      </form>
+      <p class="note" id="chatNote" hidden></p>
+    </div>
+  </section>
+
+  <!-- BOOK -->
+  <section id="v-book" class="view" hidden>
+    <div class="card" id="bookCard"></div>
+  </section>
+
+  <!-- CALENDAR -->
+  <section id="v-cal" class="view" hidden>
+    <div class="card" id="calCard"></div>
+  </section>
+
+  <!-- WALLET -->
+  <section id="v-wallet" class="view" hidden>
+    <div class="card" id="walletCard"></div>
+    <div class="card" id="groupCard"></div>
+    <div class="card" id="expCard">
+      <div id="expHead"></div>
+    <form id="expForm" class="expform" hidden>
+      <div class="chips" id="quick">
+        <button type="button" data-q="Supermarket|food">Supermarket</button>
+        <button type="button" data-q="Restaurant|food">Restaurant</button>
+        <button type="button" data-q="Coffee & snacks|food">Coffee & snacks</button>
+        <button type="button" data-q="Bus or taxi|local">Bus or taxi</button>
+        <button type="button" data-q="Tickets|activities">Tickets</button>
+      </div>
+      <div class="row">
+        <label for="e-amt">Amount (EUR)<input id="e-amt" type="number" min="0" step="0.01" required></label>
+        <label for="e-cat">Category<select id="e-cat"></select></label>
+      </div>
+      <label for="e-note">What was it?<input id="e-note" placeholder="e.g. Supermarket in Castelrotto"></label>
+      <label for="e-payer">Paid by<select id="e-payer"></select></label>
+      <div><div class="eyebrow" style="margin-bottom:6px">Split between</div><div class="chips" id="e-split"></div></div>
+      <div class="row"><button class="btn-ghost" type="button" id="expCancel">Cancel</button><button class="btn-primary" type="submit">Add expense</button></div>
+    </form>
+      <div id="expList"></div>
+    </div>
+  </section>
+</div>
+
+<nav aria-label="Main">
+  <div class="in">
+    <button data-go="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Home</button>
+    <button data-go="trip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>Trip</button>
+    <button data-go="cal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Calendar</button>
+    <button data-go="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H9l-5 4z"/></svg>Bob</button>
+    <button data-go="wallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M16 12h2M3 9h18"/></svg>Wallet</button>
+  </div>
+</nav>
+
+<script>
+(() => {
+const CATS = [["travel","Getting there"],["stay","Stay"],["local","Local transport"],["food","Food"],["activities","Activities"]];
+// ---------- real price data (checked 7 Oct 2026). status: "verified" = from the operator's own page, "estimate" = Bob's assumption
+let CHECKED = "7 Oct 2026";
+const PRICES = [
+  {id:"train",   item:"Train Munich to Bolzano, Super Sparpreis Europa, 2nd class", price:19.99, unit:"per person, one way, lowest fare", status:"verified", src:"Deutsche Bahn", url:"https://www.bahn.de/angebot/sparpreis-flexpreis/super-sparpreis-europa-italien", note:"Limited seats, no cancellation. Book early."},
+  {id:"mob7",    item:"Mobilcard South Tyrol, 7 days", price:52, unit:"per adult", status:"verified", src:"südtirolmobil", url:"https://www.suedtirolmobil.info/de/tickets/ticketfinder/mobilcard", note:"All buses and regional trains in South Tyrol. Not valid on bus 444 or outside South Tyrol."},
+  {id:"mob3",    item:"Mobilcard South Tyrol, 3 days", price:32, unit:"per adult", status:"verified", src:"südtirolmobil", url:"https://www.suedtirolmobil.info/de/tickets/ticketfinder/mobilcard"},
+  {id:"single",  item:"Single ticket bus / regional train", price:2, unit:"0.20 € per tariff km, rounded up to 0.50 €, minimum 2 €", status:"verified", src:"südtirolmobil", url:"https://www.suedtirolmobil.info/de/tickets/ticketfinder/einzelfahrschein"},
+  {id:"secRet",  item:"Seceda cable cars Ortisei to Seceda, return", price:74, unit:"per adult, summer 2026", status:"verified", src:"Seceda AG", url:"https://www.seceda.it/en/summer"},
+  {id:"secUp",   item:"Seceda cable cars, up only (24 € + 29 €)", price:53, unit:"per adult, summer 2026", status:"verified", src:"Seceda AG", url:"https://www.seceda.it/en/summer"},
+  {id:"siusi",   item:"Seiser Alm Bahn, return", price:30, unit:"per adult, summer 2026 (21 € one way)", status:"verified", src:"Seiser Alm", url:"https://www.seiseralm.it/en/info-service/mobility/seiser-alm-aerial-cableway-summer.html", note:"Bob assumes the Mobilcard does not cover it."},
+  {id:"bus444",  item:"Shuttle bus 444 Toblach to Tre Cime (Auronzo hut), return", price:22, unit:"per adult, 31 May to 11 Oct 2026", status:"verified", src:"Drei Zinnen shuttle", url:"https://www.dreizinnen.com/pdf/Lin.%20444_DreiZinnen%20Shuttle.pdf", note:"Must be booked and paid online. Mobilcard not valid."},
+  {id:"torri",   item:"Cinque Torri chairlift, return", price:27.5, unit:"per adult, Jun/Jul/Sep (30 € in August)", status:"verified", src:"5 Torri", url:"https://5torri.it/PDF/5Torri_prezzi_ESTATE_2026.pdf", note:"5 % off when paying by card."},
+  {id:"braies",  item:"Lago di Braies, bus 439 from Welsberg", price:0, unit:"reservation required 1 Jul to 15 Sep, 9:00 to 16:00", status:"verified", src:"Prags tourism", url:"https://www.myprags-dolomites.com/en/important-facts-about-lake-braies/lake-braies-reservation-2026", note:"Arrive before 9:00 to skip the reservation."},
+  {id:"cortina", item:"Bus Toblach to Cortina and to the Cinque Torri lift, return", price:15, unit:"per person", status:"estimate", src:"Bob's assumption", note:"Outside South Tyrol, the Mobilcard does not apply. Check Dolomiti Bus fares."},
+  {id:"stayK",   item:"Apartment in Castelrotto", price:95, unit:"per night for 2", status:"estimate", src:"Bob's assumption", note:"Replace with a real listing."},
+  {id:"stayO",   item:"Hotel in central Ortisei", price:130, unit:"per night for 2", status:"estimate", src:"Bob's assumption", note:"Replace with a real listing."},
+  {id:"stayT",   item:"Guesthouse in Toblach", price:90, unit:"per night for 2", status:"estimate", src:"Bob's assumption", note:"Replace with a real listing."},
+  {id:"food",    item:"Food: supermarket breakfast and picnic, one hut meal", price:30, unit:"per person per day", status:"estimate", src:"Bob's assumption"}
+];
+const P = id => PRICES.find(x=>x.id===id).price;
+try { const lp = JSON.parse(localStorage.getItem("bob-live-prices")||"null");
+  if (lp && lp.prices) { lp.prices.forEach(u=>{ const x=PRICES.find(p=>p.id===u.id); if(x){ x.price=u.price; x.status="live"; x.liveAt=u.at; } }); CHECKED = lp.checked || CHECKED; } } catch(e){}
+const fare = km => Math.max(2, Math.ceil(km*0.2*2)/2);       // official single-ticket formula
+// rides per person if you pay per ride (distances are Bob's estimates)
+const RIDES = [["Bolzano to Castelrotto",26],["Castelrotto to Ortisei and back",16],["Castelrotto to Ortisei and back",16],["Castelrotto to Ortisei and back (Seceda day)",16],["Castelrotto to Ortisei and back (Seceda day)",16],["Castelrotto to Seis and back",5],["Castelrotto to Seis and back",5],["Castelrotto to Santa Cristina and back",20],["Castelrotto to Santa Cristina and back",20],["Castelrotto to Toblach",95],["Toblach to Welsberg and back",14],["Toblach to Welsberg and back",14],["Welsberg to Lago di Braies and back",10],["Welsberg to Lago di Braies and back",10],["Toblach to Bolzano (home)",105]];
+function buildExample(){
+  const n=2, singles = RIDES.reduce((a,[,km])=>a+fare(km),0), pass=P("mob7");
+  const travel = Math.round(P("train")*2*n);
+  const local = pass*n + P("cortina")*n;
+  const act = (secUp)=> (secUp?P("secUp"):P("secRet"))*n + P("siusi")*n + P("bus444")*n + P("torri")*n;
+  const v = (key,label,stay,food,secUp,skipSiusi,stayTxt,why) => { const a = act(secUp) - (skipSiusi?P("siusi")*n:0);
+    const b = {travel, stay:Math.round(stay), local:Math.round(local), food:Math.round(food), activities:Math.round(a)};
+    return {key,label,breakdown:b,total:Object.values(b).reduce((x,y)=>x+y,0),stay:stayTxt,why}; };
+  const best = v("best","Best value", 4*P("stayK")+2*P("stayT"), P("food")*n*7, true,false,
+    `4 nights Castelrotto (about ${P("stayK")} €) + 2 nights Toblach (about ${P("stayT")} €)`,"Two bases, so the eastern lakes and peaks are a short bus ride away instead of a long transfer every day.");
+  const cheap = v("cheap","Cheapest", 4*75+2*75, 22*n*7, true,true,
+    "Simple guesthouses at about 75 € a night","Hike up to the Seiser Alm instead of the cable car, cook more.");
+  const comfort = v("comfort","More comfort", 4*P("stayO")+2*110, 40*n*7, false,false,
+    `Hotel in central Ortisei (about ${P("stayO")} €) + Toblach (about 110 €)`,"Walk to the lifts, return tickets on Seceda.");
+  return {
+    example:true, real:true, destination:"Dolomites, Italy", from:"Munich", days:7, people:2, budget:1500, style:"Budget", month:"July",
+    summary:`Built from real 2026 prices where available (checked ${CHECKED}). Lifts, passes, buses and train fares come from the operators. Stays and food are still Bob's estimates.`,
+    variants:[best,cheap,comfort],
+    decisions:[
+      {title:"Transit pass vs single tickets", choice:"Buy the 7-day Mobilcard", saving:`saves about ${Math.round((singles-pass)*n)} € for two`,
+       reason:`Paying per ride costs about ${singles.toFixed(2)} € per person for this route (official fare formula, Bob's distance estimates). The pass costs ${pass} €.`},
+      {title:"Cheap stay further out vs pricier one nearby", choice:"Castelrotto beats central Ortisei", saving:`saves about ${4*(P("stayO")-P("stayK"))} € over 4 nights`,
+       reason:"With the Mobilcard, the extra bus rides to Ortisei cost nothing, so the cheaper base wins. Room prices are still estimates."},
+      {title:"Seceda cable car", choice:"Ride up, hike down", saving:`saves ${(P("secRet")-P("secUp"))*n} € for two`,
+       reason:`Return ${P("secRet")} €, up only ${P("secUp")} € per person. The walk down to Ortisei takes about 2.5 hours.`},
+      {title:"One base or two", choice:"Move to Toblach for the last 2 nights", saving:"saves several hours on the bus",
+       reason:"Lago di Braies, Tre Cime and Cinque Torri are all in the east. Bus 444 to Tre Cime starts in Toblach."}
+    ],
+    deals:[
+      {name:"Pay the Cinque Torri lift by card", type:"Local tip", tip:"The operator gives 5 % off card payments in summer 2026."},
+      {name:"Lago di Braies before 9:00", type:"Free", tip:"Between 1 July and 15 September the bus needs a reservation from 9:00 to 16:00. Earlier, you just go."},
+      {name:"Book bus 444 online early", type:"Local tip", tip:"Tickets are only sold online and the Mobilcard is not valid, so plan 22 € per person."},
+      {name:"Picnic instead of hut lunch", type:"Cheap eats", tip:"Supermarket bread, cheese and speck for two cost a fraction of a hut lunch. Keep one hut meal for the best view."}
+    ],
+    itinerary:[
+      {day:1,title:"Ortisei",plan:"Train Munich to Bolzano, bus to Castelrotto, evening in Ortisei. Start the Mobilcard today.",cost:0},
+      {day:2,title:"Seceda",plan:"Cable cars up from Ortisei, ridge walk, hike down.",cost:P("secUp")*2},
+      {day:3,title:"Alpe di Siusi",plan:"Bus to Seis, Seiser Alm Bahn up, meadow loop, picnic.",cost:P("siusi")*2},
+      {day:4,title:"Santa Cristina",plan:"Valley trails and one hut meal.",cost:0},
+      {day:5,title:"Lago di Braies",plan:"Move to Toblach. Lake loop, arrive before 9:00 or reserve bus 439.",cost:0},
+      {day:6,title:"Tre Cime di Lavaredo",plan:"Bus 444 from Toblach, 10 km loop around the peaks.",cost:P("bus444")*2},
+      {day:7,title:"Cinque Torri & Passo Giau",plan:"Bus towards Cortina, chairlift, short hike, train home from Toblach.",cost:P("torri")*2+P("cortina")*2}
+    ]
+  };
+}
+const EXAMPLE = buildExample();
+
+// ---------- live agent: Bob reads the operators' websites through the Claude app's built-in browser
+const BROWSER = "host:claude_browser";
+const textOf = r => typeof r?.payload === "string" ? r.payload : (r?.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+async function readWeb(url, maxChars=14000){
+  const mcp = await window.claude?.use?.("mcp").catch(()=>null);
+  if (!mcp) throw {code:"no_browser"};
+  const opened = await mcp.callTool(BROWSER, "preview_start", {url}, {cache:false});
+  const tab = (/tabId\s+([^\s)]+)/.exec(textOf(opened))||[])[1];
+  try {
+    const page = await mcp.callTool(BROWSER, "get_page_text", tab?{tabId:tab,max_chars:maxChars}:{max_chars:maxChars}, {cache:false});
+    return textOf(page);
+  } finally { if (tab) mcp.callTool(BROWSER, "tabs_close", {tabId:tab}, {cache:false}).catch(()=>{}); }
+}
+const liveErr = e => ({no_browser:"Live checks need the Claude desktop app (Cowork) with its built-in browser. Here Bob uses the saved prices.",
+  server_not_connected:"The built-in browser isn't reachable. Open this page in the Claude desktop app.",
+  cancelled:"You declined the website, so Bob skipped it.", not_in_manifest:"Browser access isn't allowed for this page.",
+  not_granted:"Bob needs your OK to use Claude for reading the prices."}[e?.code] || ("Couldn't read this page" + (e?.message?": "+e.message:".")));
+let liveRun = null;
+const priceList = () => S.trip.example ? PRICES : (S.trip.prices || []);
+async function checkLive(){
+  if (liveRun) return;
+  const sample = await window.claude?.use?.("sample").catch(()=>null);
+  const targets = priceList().filter(x=>x.url && x.price>0 && x.id!=="single" && x.id!=="mob3");
+  const byUrl = {}; targets.forEach(x=>(byUrl[x.url]=byUrl[x.url]||[]).push(x));
+  liveRun = {rows: Object.entries(byUrl).map(([url,items])=>({url, src:items[0].src, items, state:"waiting"})), done:false};
+  renderLive();
+  const updates = [];
+  for (const row of liveRun.rows){
+    row.state = "reading"; renderLive();
+    try {
+      const text = await readWeb(row.url);
+      row.state = "extracting"; renderLive();
+      if (!sample) throw {code:"not_granted"};
+      const ask = `Extract current prices from this web page text. Items to find (EUR, adult/per person unless stated):\n${row.items.map(i=>`- id "${i.id}": ${i.item} (${i.unit}). Last known: ${i.price} €`).join("\n")}\n`+
+        `Rules: only use numbers that appear on the page. If an item is the sum of two listed fares, add them. If not found, found=false.\n`+
+        `Reply with only JSON: [{"id":"...","found":true,"price":0,"quote":"short exact text from the page"}]\n\nPAGE:\n${text.slice(0,12000)}`;
+      const out = await sample.json(ask, {modelTier:"quick", cache:false});
+      row.result = (Array.isArray(out)?out:[]).filter(o=>row.items.some(i=>i.id===o.id));
+      row.result.forEach(o=>{ if(o.found && Number(o.price)>0) updates.push({id:o.id, price:Number(o.price), at:Date.now()}); });
+      row.state = "done";
+    } catch(e){ row.state = "error"; row.error = liveErr(e);
+      if (["no_browser","server_not_connected","not_in_manifest","not_granted"].includes(e?.code)) { liveRun.rows.filter(r=>r.state==="waiting").forEach(r=>{r.state="error"; r.error="Skipped."}); renderLive(); break; } }
+    renderLive();
+  }
+  if (updates.length && !S.trip.example){
+    updates.forEach(u=>{ const x=priceList().find(p=>p.id===u.id); if(!x) return; x.old=x.price; x.price=u.price; x.status="live"; x.liveAt=u.at;
+      (S.trip.bookings||[]).filter(b=>b.priceId===u.id).forEach(b=>{ b.price = Math.round(u.price*(b.qty||1)*100)/100; }); });
+    S.trip.checked = new Date().toLocaleString("en-GB",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}); save();
+  } else if (updates.length){
+    updates.forEach(u=>{ const x=PRICES.find(p=>p.id===u.id); x.old=x.price; x.price=u.price; x.status="live"; x.liveAt=u.at; });
+    CHECKED = new Date().toLocaleString("en-GB",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});
+    try { const prev = JSON.parse(localStorage.getItem("bob-live-prices")||"null")?.prices||[];
+      const merged = [...prev.filter(p=>!updates.some(u=>u.id===p.id)), ...updates];
+      localStorage.setItem("bob-live-prices", JSON.stringify({checked:CHECKED, prices:merged})); } catch(e){}
+    if (S.trip.example) { S.trip = buildExample(); save(); }
+  }
+  liveRun.done = true; renderLive();
+  setTimeout(()=>{ liveRun=null; }, 0);
+}
+function renderLive(){
+  const el = $("#liveBox"); if(!el) return;
+  if (window.BOB_SERVER_SEARCH) { el.hidden = true; return; }
+  const st = {waiting:"waiting", reading:"opening the website…", extracting:"reading the prices…", done:"done", error:"skipped"};
+  if (!liveRun) { el.innerHTML = `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1 1 200px"><span class="eyebrow">Live agent · last check ${esc(S.trip.example?CHECKED:(S.trip.checked||"never"))}</span><h3 style="margin-top:4px;text-transform:none;letter-spacing:0;color:var(--ink);font-size:16px">Let Bob check today's prices on the operators' websites</h3><div class="small muted">Bob opens each official page in the Claude app's browser and reads the current fare. The app asks you before each website.</div></div><button class="btn-primary" id="liveBtn" style="flex:0 0 auto">Check prices live</button></div>`; $("#liveBtn").onclick=checkLive; return; }
+  el.innerHTML = `<span class="eyebrow">${liveRun.done?"Live check finished":"Bob is checking live prices…"}</span>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">${liveRun.rows.map(r=>`<div class="sub small">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(r.src)}</b><span class="muted">${st[r.state]}</span></div>
+      ${r.state==="error"?`<div class="note">${esc(r.error)}</div>`:""}
+      ${(r.result||[]).map(o=>{ const x=priceList().find(p=>p.id===o.id)||{item:o.id,price:0}; const old=x.old??x.price;
+        return `<div style="display:flex;justify-content:space-between;gap:8px;margin-top:4px"><span>${esc(x.item)}</span><span class="num" style="white-space:nowrap">${o.found?`${o.price!==old&&x.old!==undefined?`<s class="muted">${eur2(x.old)}</s> `:""}<b style="color:var(--good)">${eur2(o.price)}</b>`:'<span class="muted">not found</span>'}</span></div>${o.quote?`<div class="muted" style="font-style:italic">“${esc(String(o.quote).slice(0,90))}”</div>`:""}`}).join("")}
+    </div>`).join("")}</div>
+    ${liveRun.done?`<p class="small muted" style="margin:8px 0 0">Prices updated, the trip and the Book list now use them.</p><button class="btn-ghost" id="liveAgain" style="margin-top:8px">Check again</button>`:""}`;
+  const again=$("#liveAgain"); if(again) again.onclick=()=>{ liveRun=null; renderLive(); };
+}
+
+let S = {trip:EXAMPLE, variant:"best", expenses:[], chat:[], today:1};
+try { const raw = localStorage.getItem("bob-state"); if (raw) { const p = JSON.parse(raw); if (p && ("trip" in p)) { S = p; S.today = S.today || 1; S.expenses = S.expenses || []; S.chat = S.chat || []; } } } catch(e){}
+const save = () => { try { localStorage.setItem("bob-state", JSON.stringify(S)); } catch(e){} };
+
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const eur2 = n => Number(n).toLocaleString("en-GB",{minimumFractionDigits:Number(n)%1?2:0,maximumFractionDigits:2}) + " €";
+const eur = n => (Math.round(Number(n)||0)).toLocaleString("en-GB") + " €";
+const variant = () => !S.trip ? {total:0,breakdown:{},label:""} : (S.trip.variants||[]).find(v=>v.key===S.variant) || (S.trip.variants||[])[0] || {total:0,breakdown:{}};
+const spent = () => S.expenses.reduce((a,e)=>a+(Number(e.amount)||0),0);
+const spentBy = k => S.expenses.filter(e=>e.category===k).reduce((a,e)=>a+(Number(e.amount)||0),0);
+
+// ---------- navigation
+function go(v){
+  document.querySelectorAll(".view").forEach(s=>s.hidden = s.id !== "v-"+v);
+  const navKey = (v==="plan"||v==="loading"||v==="book") ? "trip" : v;
+  document.querySelectorAll("nav button").forEach(b=>{ if(b.dataset.go===navKey) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current"); });
+  if (!S.trip && ["trip","wallet","book","cal"].includes(v)) { renderNoTrip(v); window.scrollTo(0,0); return; }
+  if (v==="trip") renderTrip();
+  if (v==="wallet") renderWallet();
+  if (v==="book") renderBook();
+  if (v==="cal") renderCal();
+  if (v==="home") renderHome();
+  if (v==="chat") { renderChat(); }
+  window.scrollTo(0,0);
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-go]"); if (b) go(b.dataset.go); });
+$("#logoBtn").onclick = () => go("home");
+
+// ---------- home
+// ---------- remove trip / empty states
+let askRemove = false;
+function removeTrip(){ S = {trip:null, variant:null, expenses:[], chat:[], today:1, booked:{}, members:S.members||["Henry","Julia"]}; askRemove=false; save(); go("home"); }
+const emptyCard = (title, text) => `<div class="card empty"><svg viewBox="0 0 120 60" aria-hidden="true"><path d="M0 60 L30 22 L45 38 L68 8 L92 40 L104 28 L120 46 L120 60Z" fill="rgba(127,220,255,.18)"/><path d="M68 8 L76 18 L71 17 L68 22 L64 17Z" fill="rgba(255,255,255,.7)"/></svg>
+  <h2>${title}</h2><p class="small muted" style="margin:0">${text}</p>
+  <div class="row"><button class="btn-primary" data-go="plan" type="button">Plan a trip</button><button class="btn-ghost" type="button" data-loaddemo>Dolomites demo</button></div></div>`;
+function bindDemo(){ document.querySelectorAll("[data-loaddemo]").forEach(b=>b.onclick=()=>{ resetDemo(); go("trip"); }); }
+function renderNoTrip(v){
+  const map = {trip:["#tripBody","No trip planned","Tell Bob where you want to go, or load the Dolomites demo."],
+    book:["#bookCard","Nothing to book yet","Plan a trip first, then Bob lines up every booking with its link."],
+    wallet:["#walletCard","No trip, no wallet","The wallet tracks spending for your current trip. Plan one to start."],
+    cal:["#calCard","Your calendar is empty","Plan a trip and Bob builds an hour-by-hour schedule you can rearrange."]};
+  const [sel,t,x] = map[v];
+  if (v==="wallet") { $("#groupCard").hidden = true; $("#expCard").hidden = true; }
+  if (v==="book") { $(sel).outerHTML; }
+  $(sel).innerHTML = v==="trip" ? emptyCard(t,x) : `<h2>${t}</h2><p class="small muted" style="margin:0">${x}</p><div class="row"><button class="btn-primary" data-go="plan" type="button">Plan a trip</button><button class="btn-ghost" type="button" data-loaddemo>Dolomites demo</button></div>`;
+  bindDemo();
+}
+function removeBlock(){
+  return askRemove
+    ? `<div class="exconfirm" style="margin-top:4px"><span class="small">Remove ${esc(S.trip.destination)} with its bookings and expenses?</span><button type="button" class="btn-ghost" data-rmcancel>Keep</button><button type="button" class="exdel-yes" data-rmyes>Remove trip</button></div>`
+    : `<button type="button" class="rmtrip" data-rmtrip><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>Remove trip</button>`;
+}
+function bindRemove(rerender){
+  document.querySelectorAll("[data-rmtrip]").forEach(b=>b.onclick=()=>{ askRemove=true; rerender(); });
+  document.querySelectorAll("[data-rmcancel]").forEach(b=>b.onclick=()=>{ askRemove=false; rerender(); });
+  document.querySelectorAll("[data-rmyes]").forEach(b=>b.onclick=removeTrip);
+}
+
+function renderHome(){
+  if (!S.trip) {
+    $("#homeTrip").innerHTML = `<span class="eyebrow">Your trip</span><h2>No trip planned yet</h2><p class="small muted" style="margin:0">Pick a destination, a budget and a few days. Bob does the research.</p>
+      <div class="row"><button class="btn-primary" data-go="plan" type="button">Plan a trip</button><button class="btn-ghost" type="button" data-loaddemo>Dolomites demo</button></div>`;
+    $("#homeSmart").innerHTML = `<span class="eyebrow">Why Bob looks at the whole trip</span>
+      <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:18px">The cheaper hotel isn't always the cheaper trip</h3>
+      <div class="row"><div class="sub"><div class="small muted">Far out</div><b class="num">350 € + 100 € transport = 450 €</b></div><div class="sub"><div class="small muted">Central</div><b class="num">400 € + 20 € transport = 420 €</b></div></div>`;
+    bindDemo(); return;
+  }
+  const t = S.trip, v = variant(), sp = spent(), left = t.budget - sp, planned = v.total;
+  const days = t.itinerary?.length || t.days;
+  const items = TODOS().flatMap(g=>g.items).filter(i=>i.url), booked = items.filter(i=>(S.booked||{})[i.id]).length;
+  const next = items.find(i=>!(S.booked||{})[i.id]);
+  const pPlan = Math.min(100, planned/t.budget*100), pSpent = Math.min(100, sp/t.budget*100);
+  $("#homeTrip").innerHTML = `
+    <div style="display:flex;gap:12px;align-items:flex-start">
+      <div style="flex:1;min-width:0"><span class="eyebrow">${t.example?"Demo trip":"Your trip"} · ${dayDate(1)} to ${dayDate(days)}</span><h2>${esc(t.destination)}</h2>
+        <div class="muted small">${t.people} people · ${days} days · ${eur(t.budget)} budget</div></div>
+      <button class="btn-ghost" data-go="trip" style="flex:none;padding:10px 14px">Open</button>
+    </div>
+    <div class="stats">
+      <div><span class="eyebrow">Planned</span><b class="num">${eur(planned)}</b></div>
+      <div><span class="eyebrow">Spent</span><b class="num">${eur(sp)}</b></div>
+      <div><span class="eyebrow">Left</span><b class="num" style="color:${left<0?"var(--bad)":"var(--good)"}">${eur(left)}</b></div>
+    </div>
+    <div class="dualbar" role="img" aria-label="Planned ${Math.round(pPlan)} percent, spent ${Math.round(pSpent)} percent of budget"><span class="pl" style="width:${pPlan}%"></span><span class="sp" style="width:${pSpent}%"></span></div>
+    <div class="small muted" style="display:flex;gap:14px;flex-wrap:wrap"><span><i class="dot pl"></i>planned ${Math.round(pPlan)} %</span><span><i class="dot sp"></i>spent ${Math.round(pSpent)} %</span><span>budget ${eur(t.budget)}</span></div>
+    ${items.length ? `<button class="nextstep" data-go="book" type="button">
+        <span class="eyebrow">${next?`Next step · ${booked} of ${items.length} booked`:"All booked"}</span>
+        <b>${next?esc(next.what):"Everything is booked. Enjoy the trip."}</b>
+        ${next?`<span class="small muted">${esc(next.when)}${next.price?" · "+eur(next.price):""}</span>`:""}
+      </button>` : ""}
+    <div class="quick">
+      <button data-go="book" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 4h14v16l-7-4-7 4z"/></svg>Book</button>
+      <button data-go="chat" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H9l-5 4z"/></svg>Ask Bob</button>
+      <button data-go="wallet" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M16 12h2M3 9h18"/></svg>Wallet</button>
+      <button data-go="cal" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Calendar</button>
+    </div>
+    ${removeBlock()}`;
+  bindRemove(renderHome);
+  const d = (t.decisions||[])[0];
+  $("#homeSmart").innerHTML = d ? `
+    <span class="eyebrow">Bob's smartest call on this trip</span>
+    <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:18px;margin:2px 0 0">${esc(d.choice)}</h3>
+    <div class="savebadge">${esc(d.saving)}</div>
+    <p class="small muted" style="margin:0">${esc(d.reason)}</p>
+    <button class="btn-ghost" data-go="trip" type="button">See all ${(t.decisions||[]).length} smart calls</button>` : `
+    <span class="eyebrow">Why Bob looks at the whole trip</span>
+    <h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:18px">The cheaper hotel isn't always the cheaper trip</h3>
+    <div class="row"><div class="sub"><div class="small muted">Far out</div><b class="num">350 € + 100 € transport = 450 €</b></div><div class="sub"><div class="small muted">Central</div><b class="num">400 € + 20 € transport = 420 €</b></div></div>`;
+}
+
+// ---------- trip
+function renderTrip(){
+  const t = S.trip, v = variant(), over = v.total - t.budget;
+  const tabs = (t.variants||[]).map(x=>`<button type="button" data-var="${esc(x.key)}" aria-pressed="${x.key===v.key}">${esc(x.label)}</button>`).join("");
+  const pct = Math.min(100, Math.max(0, v.total / t.budget * 100));
+  $("#tripBody").innerHTML = `
+  <div class="card">
+    <div><span class="eyebrow">${t.example?"Example trip · ":""}${t.people} people · ${t.days} days · ${eur(t.budget)}</span><h2>Your trip to ${esc(t.destination)}</h2></div>
+    <p class="muted small" style="margin:0">${esc(t.summary)}</p>
+    <div class="seg" id="varSeg">${tabs}</div>
+    <div class="sub" style="display:flex;flex-direction:column;gap:10px">
+      <div class="row" style="align-items:flex-end"><div><div class="eyebrow">Total trip cost</div><div class="total num">${eur(v.total)}</div></div>
+      <div style="text-align:right">${over>0?`<span class="pill bad">${eur(over)} over budget</span>`:`<span class="pill good">${eur(-over)} left in your budget</span>`}</div></div>
+      <div class="bar" role="img" aria-label="${Math.round(pct)} percent of budget"><span style="width:${pct}%;background:${over>0?"var(--bad)":"var(--good)"}"></span></div>
+      <div class="cats">${CATS.map(([k,l])=>`<div class="cat"><span class="small muted">${l}</span><b class="num">${eur(v.breakdown?.[k])}</b></div>`).join("")}</div>
+      <div class="small"><b>Stay:</b> ${esc(v.stay)}<br><span class="muted">${esc(v.why)}</span></div>
+    </div>
+    <span class="pill ${t.real?"good":"est"}" style="align-self:flex-start">${t.example?"Transport and lift prices are real 2026 fares. Stays and food are estimates.":t.real?`${(t.prices||[]).filter(x=>x.status==="live").length} prices researched live, the rest are estimates. See Book for sources.`:"Prices are Bob's estimates. Check before you book."}</span>
+  </div>
+  ${(t.example||(t.bookings&&t.bookings.length))?`<div class="card" style="background:var(--navy-3);flex-direction:row;align-items:center;flex-wrap:wrap"><div style="flex:1 1 180px"><h2>Book</h2><div class="small muted">Every price with its source, then the link to book it.</div></div>
+    <button class="btn-primary" data-go="book" style="flex:1 1 140px">Book this trip</button></div>`:""}
+  <div class="card"><h3>Smart calls over the whole stay</h3><ul class="list">${(t.decisions||[]).map(d=>`<li class="decision"><span class="eyebrow">${esc(d.title)}</span><b>${esc(d.choice)}</b><span class="save">${esc(d.saving)}</span><span class="small muted">${esc(d.reason)}</span></li>`).join("")}</ul></div>
+  <div class="card"><h3>Local deals and cheap eats</h3><ul class="list">${(t.deals||[]).map(d=>`<li class="sub"><span class="eyebrow">${esc(d.type)}</span><div><b>${esc(d.name)}</b></div><div class="small muted">${esc(d.tip)}</div></li>`).join("")}</ul></div>
+  <div class="card"><div class="row" style="align-items:center"><h3>Day by day</h3><label for="todaySel" style="flex-direction:row;align-items:center;justify-content:flex-end;gap:8px">We're on<select id="todaySel" style="width:auto;padding:6px 10px">${(t.itinerary||[]).map(d=>`<option value="${esc(d.day)}" ${+d.day===+S.today?"selected":""}>Day ${esc(d.day)}</option>`).join("")}</select></label></div><ul class="list">${(t.itinerary||[]).map(d=>`<li class="day" style="${+d.day===+S.today?"outline:2px solid var(--accent);outline-offset:6px;border-radius:8px":""}"><div class="d"><small>DAY</small>${esc(d.day)}</div><div style="min-width:0"><b>${esc(d.title)}</b><div class="small muted">${esc(d.plan)}</div></div><div class="num small" style="font-weight:700">${eur(d.cost)}</div></li>`).join("")}</ul>
+    <button class="btn-ghost" data-go="chat">Ask Bob to change something</button></div>
+`;
+  const ts=$("#todaySel"); if(ts) ts.onchange=()=>{S.today=+ts.value;save();renderTrip();};
+  $("#tripBody").insertAdjacentHTML("beforeend", `<div class="card" style="padding:14px 18px">${removeBlock()}</div>`);
+  bindRemove(renderTrip);
+  document.querySelectorAll("#varSeg button").forEach(b=>b.onclick=()=>{S.variant=b.dataset.var;save();renderTrip();});
+}
+
+// ---------- wallet
+function renderWallet(){
+  $("#groupCard").hidden = false; $("#expCard").hidden = false;
+    const t = S.trip, v = variant(), sp = spent(), left = t.budget - sp;
+  $("#walletCard").innerHTML = `
+    <div><span class="eyebrow">${esc(t.destination)} · ${esc(v.label)} plan</span><h2>Wallet</h2></div>
+    <div class="row"><div class="sub"><div class="eyebrow">Spent</div><div class="num" style="font-size:24px;font-weight:800">${eur(sp)}</div></div>
+    <div class="sub"><div class="eyebrow">Left to spend</div><div class="num" style="font-size:24px;font-weight:800;color:${left<0?"var(--bad)":"var(--good)"}">${eur(left)}</div></div></div>
+    <div class="bar"><span style="width:${Math.min(100,sp/t.budget*100)}%;background:${left<0?"var(--bad)":"var(--accent)"}"></span></div>
+    <div style="display:flex;flex-direction:column;gap:8px">${CATS.map(([k,l])=>{const p=v.breakdown?.[k]||0,s=spentBy(k);return `<div><div class="row small" style="justify-content:space-between"><span style="flex:none">${l}</span><span class="num muted" style="flex:none">${eur(s)} of ${eur(p)} planned</span></div><div class="bar" style="height:6px"><span style="width:${p?Math.min(100,s/p*100):0}%;background:${s>p?"var(--bad)":"var(--good)"}"></span></div></div>`}).join("")}</div>`;
+  renderGroup(); renderExpenses();
+}
+$("#e-cat").innerHTML = CATS.map(([k,l])=>`<option value="${k}">${l}</option>`).join("");
+// ---------- expense overview with delete
+let askDel = null;
+function renderExpenses(){
+  const list = S.expenses.map((e,i)=>({e,i})).reverse(), total = spent();
+  const day = ts => ts ? new Date(ts).toLocaleDateString("en-GB",{day:"numeric",month:"short"}) : "";
+  $("#expHead").innerHTML = `
+    <div style="display:flex;align-items:flex-end;gap:12px"><div style="flex:1;min-width:0"><span class="eyebrow">${S.expenses.length} ${S.expenses.length===1?"expense":"expenses"} · total ${eurc(total)}</span><h2>All expenses</h2></div>
+      <button type="button" id="plusExp" class="plusbtn" aria-label="Add an expense" aria-expanded="${!$("#expForm").hidden}">+</button></div>`;
+  $("#plusExp").onclick = () => { const f=$("#expForm"); f.hidden=!f.hidden; $("#plusExp").setAttribute("aria-expanded", !f.hidden); if(!f.hidden) $("#e-amt").focus(); };
+  $("#expList").innerHTML = `
+    ${list.length ? `<div class="explist">${list.map(({e,i})=>{
+      const cat=(CATS.find(c=>c[0]===e.category)||[])[1]||e.category, sp=splitOf(e);
+      return `<div class="exrow">
+        <div style="min-width:0"><b>${esc(e.note||"Expense")}</b>
+          <div class="small muted">${esc(cat)} · paid by <b style="color:var(--ink)">${esc(payerOf(e))}</b> · ${sp.length===members().length?"split by everyone":"for "+esc(sp.join(", "))}${e.at?" · "+day(e.at):""}${e.bk?" · booked":""}</div></div>
+        <div class="num exam">${eurc(e.amount)}</div>
+        ${askDel===i
+          ? `<div class="exconfirm"><span class="small">Delete this expense?</span><button type="button" class="btn-ghost" data-cancel>Keep</button><button type="button" class="exdel-yes" data-yes="${i}">Delete</button></div>`
+          : `<button type="button" class="exdel" data-del="${i}" aria-label="Delete ${esc(e.note||"expense")}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button>`}
+      </div>`}).join("")}</div>`
+      : '<p class="muted small" style="margin:0">No expenses yet. Tap + to add one, or just tell Bob in the chat, e.g. "Julia paid 36 € at the supermarket".</p>'}`;
+  document.querySelectorAll("#expList [data-del]").forEach(b=>b.onclick=()=>{ askDel=+b.dataset.del; renderExpenses(); });
+  document.querySelectorAll("#expList [data-cancel]").forEach(b=>b.onclick=()=>{ askDel=null; renderExpenses(); });
+  document.querySelectorAll("#expList [data-yes]").forEach(b=>b.onclick=()=>{ const e=S.expenses[+b.dataset.yes];
+    if (e && e.bk && S.booked) S.booked[e.bk]=false;
+    S.expenses.splice(+b.dataset.yes,1); askDel=null; save(); renderWallet(); });
+}
+
+// ---------- group: who paid what, who owes whom
+const members = () => (S.members && S.members.length ? S.members : (S.members = ["Henry","Julia"]));
+const payerOf = e => e.paidBy || members()[0];
+const splitOf = e => (e.split && e.split.length ? e.split : members());
+function balances(){
+  const b = Object.fromEntries(members().map(m=>[m,{paid:0,share:0}]));
+  for (const e of S.expenses){ const a=Number(e.amount)||0, p=payerOf(e), sp=splitOf(e).filter(m=>b[m]);
+    if (b[p]) b[p].paid += a; sp.forEach(m=>b[m].share += a/sp.length); }
+  return b;
+}
+function settle(b){                       // greedy: biggest debtor pays biggest creditor
+  const d = Object.entries(b).map(([m,x])=>[m, Math.round((x.paid-x.share)*100)/100]);
+  const cr = d.filter(x=>x[1]>0.009).sort((a,b)=>b[1]-a[1]), db = d.filter(x=>x[1]<-0.009).map(([m,v])=>[m,-v]).sort((a,b)=>b[1]-a[1]);
+  const out=[]; let i=0,j=0;
+  while(i<db.length && j<cr.length){ const x=Math.min(db[i][1],cr[j][1]); out.push([db[i][0],cr[j][0],x]); db[i][1]-=x; cr[j][1]-=x; if(db[i][1]<0.01) i++; if(cr[j][1]<0.01) j++; }
+  return out;
+}
+const eurc = n => Number(n).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2}) + " €";
+let splitSel = null, addOpen = false;
+function renderGroup(){
+  const ms = members(), b = balances(), tx = settle(b);
+  $("#groupCard").innerHTML = `
+    <div><span class="eyebrow">${ms.length} travellers</span><h2>Who owes whom</h2></div>
+    <div class="chips" style="align-items:center">${ms.map(m=>`<span class="sub small" style="padding:6px 10px;border-radius:99px">${esc(m)}${ms.length>1?` <button type="button" data-rm="${esc(m)}" aria-label="Remove ${esc(m)}" style="background:none;color:var(--muted);padding:0 0 0 4px">×</button>`:""}</span>`).join("")}
+      <button type="button" id="plusMember" class="plusbtn" aria-label="Add a group member" aria-expanded="${addOpen}">+</button></div>
+    <form class="composer" id="addMember" ${addOpen?"":"hidden"}><input id="m-name" placeholder="Name" aria-label="Name of group member" maxlength="20"><button class="btn-primary" type="submit">Add</button></form>
+    <div style="overflow-x:auto"><table class="small num" style="width:100%;border-collapse:collapse">
+      <thead><tr class="muted" style="text-align:right"><th style="text-align:left;padding:6px 0">Who</th><th>Paid</th><th>Share</th><th>Balance</th></tr></thead>
+      <tbody>${ms.map(m=>{const x=b[m], bal=x.paid-x.share; return `<tr style="text-align:right;border-top:1px solid var(--line)"><td style="text-align:left;padding:8px 0"><b>${esc(m)}</b></td><td>${eurc(x.paid)}</td><td>${eurc(x.share)}</td><td style="color:${bal>0.009?"var(--good)":bal<-0.009?"var(--bad)":"var(--muted)"};font-weight:800">${bal>0?"+":""}${eurc(bal)}</td></tr>`}).join("")}</tbody></table></div>
+    <div class="sub"><div class="eyebrow" style="margin-bottom:4px">Settle up</div>${tx.length?tx.map(([f,t,a])=>`<div><b>${esc(f)}</b> pays <b>${esc(t)}</b> <span class="num" style="color:var(--accent);font-weight:800">${eurc(a)}</span></div>`).join(""):'<span class="small muted">Everyone is even.</span>'}</div>`;
+  $("#plusMember").onclick = () => { addOpen=!addOpen; renderGroup(); if(addOpen) $("#m-name").focus(); };
+  $("#addMember").onsubmit = e => { e.preventDefault(); const n=$("#m-name").value.trim(); if(!n || ms.includes(n)) return; S.members.push(n); splitSel=null; addOpen=false; save(); renderWallet(); };
+  document.querySelectorAll("[data-rm]").forEach(x=>x.onclick=()=>{ S.members=ms.filter(m=>m!==x.dataset.rm); splitSel=null; save(); renderWallet(); });
+  // form selects
+  const pay=$("#e-payer"), cur=pay.value; pay.innerHTML = ms.map(m=>`<option ${m===cur?"selected":""}>${esc(m)}</option>`).join("");
+  if (!splitSel || splitSel.some(m=>!ms.includes(m))) splitSel = ms.slice();
+  $("#e-split").innerHTML = ms.map(m=>`<button type="button" data-sp="${esc(m)}" aria-pressed="${splitSel.includes(m)}" style="${splitSel.includes(m)?"background:var(--accent);color:var(--accent-ink)":""}">${esc(m)}</button>`).join("");
+  document.querySelectorAll("[data-sp]").forEach(x=>x.onclick=()=>{ const m=x.dataset.sp; splitSel = splitSel.includes(m)?splitSel.filter(y=>y!==m):[...splitSel,m]; if(!splitSel.length) splitSel=[m]; renderGroup(); });
+}
+document.querySelectorAll("#quick [data-q]").forEach(b=>b.onclick=()=>{ const [n,c]=b.dataset.q.split("|"); $("#e-note").value=n; $("#e-cat").value=c; $("#e-amt").focus(); });
+$("#expForm").onsubmit = e => { e.preventDefault(); const a = parseFloat($("#e-amt").value); if(!(a>0)) return;
+  S.expenses.push({amount:a,category:$("#e-cat").value,note:$("#e-note").value.trim(),at:Date.now(),paidBy:$("#e-payer").value,split:splitSel.slice()}); save();
+  $("#e-amt").value=""; $("#e-note").value=""; $("#expForm").hidden=true; renderWallet(); };
+$("#expCancel").onclick = () => { $("#expForm").hidden=true; renderExpenses(); };
+
+// ---------- planning with Claude
+let style = "Budget";
+document.querySelectorAll("#styleSeg button").forEach(b=>b.onclick=()=>{style=b.dataset.style;document.querySelectorAll("#styleSeg button").forEach(x=>x.setAttribute("aria-pressed",x===b));});
+const STEPS = ["Finding the cheapest way to get there","Comparing places to stay, incl. transport costs","Checking transit passes vs single tickets","Hunting cheap eats and local deals","Fitting everything into your budget","Building your day-by-day plan"];
+let planCtl, stepTimer;
+const errCopy = c => ({not_granted:"Bob needs your OK to use Claude. Allow it when asked, or reload the page.",rate_limited:"Bob is out of breath. Try again in a minute.",sampling_disabled:"Bob's AI isn't switched on yet. Follow Stage 2 of the setup guide.",invalid_json:"Bob scribbled something unreadable. Try again.",session_expired:"Please sign in to Claude again."}[c] || "Bob couldn't finish. Try again.");
+
+const showDemoToggle = () => { $("#demoWrap").hidden = !/dolomit/i.test($("#f-dest").value); };
+$("#f-dest").addEventListener("input", showDemoToggle); showDemoToggle();
+function agentLog(msg){ const d=document.createElement("div"); d.className="muted"; d.textContent="› "+msg; $("#agentLog").append(d); $("#agentLog").scrollTop=1e9; }
+$("#planForm").onsubmit = async e => {
+  e.preventDefault();
+  const err = $("#planErr");
+  if (/dolomit/i.test($("#f-dest").value) && $("#f-demo").checked) {            // saved demo: real-price example, no Claude needed
+    err.hidden = true; go("loading"); $("#agentLog").innerHTML=""; $("#loadTitle").textContent = "Bob is planning your trip to the Dolomites";
+    let i=0; const paint=()=>$("#steps").innerHTML=STEPS.map((s,j)=>`<li class="${j<i?"done":j===i?"now":""}">${s}</li>`).join("");
+    paint(); clearInterval(stepTimer); stepTimer=setInterval(()=>{ i++; paint(); if(i>=STEPS.length){ clearInterval(stepTimer); resetDemo(); go("trip"); } }, 900);
+    return;
+  }
+  const sample = await window.claude?.use?.("sample").catch(()=>null);
+  if (!sample) { err.hidden=false; err.textContent="Bob's AI isn't switched on yet. Follow Stage 2 of the setup guide."; return; }
+  err.hidden = true;
+  const start = $("#f-start").value || "2027-07-06";
+  const req = {destination:$("#f-dest").value.trim(), from:$("#f-from").value.trim(), days:+$("#f-days").value, people:+$("#f-people").value, budget:+$("#f-budget").value,
+    startDate:start, month:new Date(start+"T12:00:00").toLocaleDateString("en-GB",{month:"long",year:"numeric"}), style, extra:$("#f-extra").value.trim()};
+  const endIso = (()=>{ const d=new Date(start+"T12:00:00"); d.setDate(d.getDate()+req.days-1); return d.toISOString().slice(0,10); })();
+  go("loading"); $("#agentLog").innerHTML="";
+  $("#loadTitle").textContent = `Bob is researching your trip to ${req.destination}`;
+  let i = 0; const paint = () => $("#steps").innerHTML = STEPS.map((s,j)=>`<li class="${j<i?"done":j===i?"now":""}">${s}</li>`).join("");
+  paint(); clearInterval(stepTimer); stepTimer = setInterval(()=>{ if(i<STEPS.length-1){i++;paint();} }, 9000);
+  planCtl = new AbortController();
+  const mcp = await window.claude?.use?.("mcp").catch(()=>null);
+  const caps = await sample.limits().catch(()=>null);
+  const live = !!(mcp && caps?.tools) || !!window.BOB_SERVER_SEARCH;
+  agentLog(window.BOB_SERVER_SEARCH ? "Bob is searching the web for current prices. This can take up to a minute." : live ? "Live research on: Bob may open websites (the app asks you for each one)." : "No browser here, so Bob plans with estimates.");
+  let lookups = 0;
+  const tools = (mcp && caps?.tools) ? [
+    {name:"web_search", description:"Search the web live. Returns result titles, links and snippets as text.",
+     inputSchema:{type:"object",properties:{query:{type:"string"}},required:["query"]},
+     execute: async inp => { if (++lookups>10) throw new Error("lookup budget used up, finish with estimates"); agentLog("Searching: "+String(inp.query).slice(0,70)); return (await readWeb("https://html.duckduckgo.com/html/?q="+encodeURIComponent(String(inp.query)), 6000)).slice(0,6000); }},
+    {name:"read_webpage", description:"Open one web page (full https URL) and return its visible text. Prefer official operator / attraction pages for prices.",
+     inputSchema:{type:"object",properties:{url:{type:"string"}},required:["url"]},
+     execute: async inp => { if (++lookups>10) throw new Error("lookup budget used up, finish with estimates"); const u=String(inp.url); if(!/^https:\/\//.test(u)) throw new Error("need a full https URL");
+       agentLog("Reading "+u.replace(/^https:\/\//,"").slice(0,60)); return (await readWeb(u, 10000)).slice(0,10000); }}
+  ] : null;
+  const prompt = `You are Bob, a budget travel planner for students. Plan the WHOLE stay as one optimisation problem, for ANY destination (mountains, city trip, beach...).
+Trip request: ${JSON.stringify(req)} (trip dates ${start} to ${endIso}).
+${live ? `RESEARCH FIRST with your tools (max 8 lookups, be efficient): 1) the local public transport operator's official fares: single ticket vs day/multi-day/tourist pass; 2) entry prices of the 2-4 main sights or activities you plan; 3) anything else that decides the budget. Use official sites. Every price you found on a page gets status "live" with its URL. Accommodation and food may stay estimates (hotel sites block reading).` : `You have no live tools: every price is an estimate (status "estimate").`}
+Rules:
+- All money in EUR. Variant breakdowns are for the whole group. Round sensibly.
+- Compare at least: transit pass vs paying per ride over the stay (with the math), and a cheaper stay further out (incl. extra transport) vs a pricier central one.
+- Cheap eats and local money-saving tips a quick search would miss (describe the type of place; no invented exact prices).
+- Three variants: "best" (Best value, must fit the budget), "cheap", "comfort". total = sum of breakdown.
+- Itinerary: one entry per day (${req.days} days), cost = extra spend that day for the group excluding stay and food. Each day gets a "schedule": 4-8 items in order from morning to evening, dur in minutes (realistic travel times and opening hours), cost in EUR for the group.
+- prices: every price you rely on, unit price as on the source (e.g. per adult), with status, source name and url.
+- bookings: what the user must book or buy, in a sensible order. group is "Book first" (sells out / dated), "Before you go" or "On the trip". price = total for the group = unit price × qty. url = where to book: for stays use https://www.booking.com/searchresults.html?ss=<place>&checkin=<date>&checkout=<date>&group_adults=${req.people}&no_rooms=1 ; for long-distance trains/buses https://www.omio.com/ (or the operator); otherwise the official page you opened. day = trip day number (1..${req.days}).
+Reply with only JSON of this shape:
+{"summary":"1-2 sentences","variants":[{"key":"best","label":"Best value","total":0,"breakdown":{"travel":0,"stay":0,"local":0,"food":0,"activities":0},"stay":"where and price per night","why":"one sentence"}],
+"decisions":[{"title":"","choice":"","saving":"saves about X €","reason":"the math in 1-2 sentences"}],
+"deals":[{"name":"","type":"Cheap eats|Local tip|Free","tip":""}],
+"itinerary":[{"day":1,"title":"","plan":"","cost":0,"schedule":[{"title":"Bus to the old town","dur":30,"cost":0,"type":"transport|activity|food|stay|free"}]}],
+"prices":[{"id":"short_id","item":"","price":0,"unit":"per adult, ...","status":"live|estimate","src":"name","url":"https://..."}],
+"bookings":[{"id":"short_id","group":"Book first","what":"Book ...","day":1,"dayEnd":3,"qty":2,"priceId":"short_id","price":0,"who":"Seller name","url":"https://...","tip":"one line","cat":"travel|stay|local|food|activities"}],
+"onTrip":[{"what":"","day":1,"tip":""}]}`;
+  try {
+    const opts = {signal:planCtl.signal, modelTier:"default"}; if (tools) opts.tools = tools; else opts.cache = false;
+    const out = await sample.json(prompt, opts);
+    if (!out || !Array.isArray(out.variants) || !out.variants.length) throw {code:"invalid_json"};
+    out.variants.forEach(v => { v.breakdown = v.breakdown||{}; v.total = CATS.reduce((a,[k])=>a+(Number(v.breakdown[k])||0),0); });
+    ["decisions","deals","itinerary","prices","bookings","onTrip"].forEach(k=>{ if(!Array.isArray(out[k])) out[k]=[]; });
+    out.prices.forEach(x=>{ x.price=Number(x.price)||0; x.status = x.status==="live"&&x.url ? "live" : "estimate"; });
+    out.bookings.forEach((b,i)=>{ b.id=String(b.id||"b"+i); b.price=Number(b.price)||0; b.qty=Number(b.qty)||1; if(!/^https:\/\//.test(b.url||"")) b.url=""; });
+    S = {trip:{...req, ...out, example:false, real:out.prices.some(x=>x.status==="live"), checked:new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})},
+         variant:(out.variants.find(v=>v.key==="best")||out.variants[0]).key, expenses:[], chat:[], today:1, booked:{}, members:S.members||["Henry","Julia"]};
+    save(); go("trip");
+  } catch(x) {
+    go("plan");
+    if (x?.code !== "cancelled") { err.hidden=false; err.textContent = errCopy(x?.code); }
+  } finally { clearInterval(stepTimer); }
+};
+$("#stopPlan").onclick = () => { planCtl?.abort(); clearInterval(stepTimer); go("plan"); };
+// ---------- calendar: hour-by-hour schedule, drag and drop or buttons
+const TYPES = {transport:["Transport","#8fe2ff"], activity:["Activity","#ffc65c"], food:["Food","#4fd39a"], stay:["Stay","#c7a6ff"], free:["Free time","#9db7d6"]};
+const DOLO_SCHED = {
+ 1:[["Train Munich → Bolzano",255,0,"transport"],["Picnic lunch in Bolzano",45,0,"food"],["Bus Bolzano → Castelrotto",60,0,"transport"],["Check in to the apartment",30,0,"stay"],["Bus to Ortisei, old town walk",150,0,"activity"],["Dinner",90,0,"food"]],
+ 2:[["Bus Castelrotto → Ortisei",30,0,"transport"],["Seceda cable cars up",30,106,"activity"],["Ridge walk on the Seceda",120,0,"activity"],["Picnic with the view",45,0,"food"],["Hike down to Ortisei",150,0,"activity"],["Bus back to Castelrotto",30,0,"transport"],["Cook dinner at the apartment",90,0,"food"]],
+ 3:[["Bus Castelrotto → Seis",15,0,"transport"],["Seiser Alm Bahn up",15,60,"activity"],["Meadow loop on the Alpe di Siusi",180,0,"activity"],["Picnic lunch",45,0,"food"],["Seiser Alm Bahn down, bus back",45,0,"transport"],["Free evening",120,0,"free"]],
+ 4:[["Bus to Santa Cristina",25,0,"transport"],["Valley trail",150,0,"activity"],["Lunch at a mountain hut",75,0,"food"],["Slow afternoon, swim or nap",120,0,"free"],["Bus back to Castelrotto",25,0,"transport"],["Dinner",90,0,"food"]],
+ 5:[["Check out, train to Welsberg",120,0,"transport"],["Bus 439 to Lago di Braies",20,0,"transport"],["Lake loop",90,0,"activity"],["Picnic by the lake",45,0,"food"],["Bus and train to Toblach, check in",75,0,"stay"],["Dinner in Toblach",90,0,"food"]],
+ 6:[["Bus 444 to the Auronzo hut",45,44,"transport"],["Tre Cime loop",240,0,"activity"],["Lunch at the Locatelli hut",60,0,"food"],["Bus 444 back to Toblach",45,0,"transport"],["Free evening",120,0,"free"]],
+ 7:[["Bus towards Cortina",60,30,"transport"],["Cinque Torri chairlift up",15,55,"activity"],["Short hike around the towers",120,0,"activity"],["Chairlift down, bus to Toblach",90,0,"transport"],["Train home",300,0,"transport"]]};
+const DAY_START = {1:"07:30",2:"08:30",3:"08:30",4:"09:00",5:"07:00",6:"07:30",7:"07:30"};
+let calSel = 1, dragId = null, calNew = null;
+const uid = () => Math.random().toString(36).slice(2,9);
+function buildSchedule(){
+  const t=S.trip;
+  return (t.itinerary||[]).map(d=>{
+    const src = t.example ? (DOLO_SCHED[d.day]||[]).map(([title,dur,cost,type])=>({title,dur,cost,type}))
+              : (Array.isArray(d.schedule)&&d.schedule.length ? d.schedule : [{title:d.title, dur:180, cost:d.cost||0, type:"activity", note:d.plan}]);
+    return {day:d.day, start:(t.example?DAY_START[d.day]:null)||"09:00", items:src.map(x=>({id:uid(), title:String(x.title||"Activity"), dur:Math.max(10,Number(x.dur)||60), cost:Number(x.cost)||0, type:TYPES[x.type]?x.type:"activity", note:x.note||""}))};
+  });
+}
+function sched(){ if (!S.schedule || S.schedule.length !== (S.trip.itinerary||[]).length) { S.schedule = buildSchedule(); save(); } return S.schedule; }
+const toMin = t => { const [h,m]=String(t||"09:00").split(":").map(Number); return (h||0)*60+(m||0); };
+const toHHMM = m => { m=((m%1440)+1440)%1440; return String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0"); };
+function findItem(id){ for (const d of sched()){ const i=d.items.findIndex(x=>x.id===id); if(i>=0) return {d,i}; } return null; }
+function moveItem(id, toDay, toIndex){
+  const f=findItem(id); if(!f) return; const [it]=f.d.items.splice(f.i,1);
+  const dest=sched().find(d=>d.day===toDay); if(!dest){ f.d.items.splice(f.i,0,it); return; }
+  dest.items.splice(Math.max(0,Math.min(toIndex,dest.items.length)),0,it); save(); renderCal();
+}
+function renderCal(){
+  const days = sched(); if (!days.length) { renderNoTrip("cal"); return; }
+  if (!days.some(d=>d.day===calSel)) calSel = days[0].day;
+  const it = S.trip.itinerary||[];
+  $("#calCard").innerHTML = `
+    <div style="display:flex;gap:12px;align-items:flex-end"><div style="flex:1;min-width:0"><span class="eyebrow">${esc(S.trip.destination)} · ${days.length} days</span><h2>Calendar</h2></div>
+      <span class="small muted" style="flex:none">Drag to rearrange</span></div>
+    <div class="calstrip" role="tablist">${days.map(d=>{ const di=it.find(x=>x.day===d.day)||{}; const c=d.items.reduce((a,x)=>a+x.cost,0);
+      return `<button role="tab" type="button" class="calday ${d.day===calSel?"on":""}" data-sel="${d.day}" data-drop="${d.day}" aria-selected="${d.day===calSel}">
+        <span class="cd-w">${esc(dayDate(d.day).split(",")[0])}</span><b>${esc(dayDate(d.day).replace(/^\w+, /,""))}</b><span class="cd-t">${esc(di.title||"Day "+d.day)}</span>${c?`<span class="cd-c num">${eur(c)}</span>`:""}</button>`}).join("")}</div>
+    ${renderDay(days.find(d=>d.day===calSel))}`;
+  bindCal();
+}
+function renderDay(d){
+  let t = toMin(d.start); const di=(S.trip.itinerary||[]).find(x=>x.day===d.day)||{};
+  const total = d.items.reduce((a,x)=>a+x.cost,0), end = toMin(d.start)+d.items.reduce((a,x)=>a+x.dur,0);
+  return `<div class="dayhead"><div style="min-width:0"><span class="eyebrow">Day ${d.day} · ${esc(dayDate(d.day))}</span><h3 style="text-transform:none;letter-spacing:0;color:var(--ink);font-size:18px;margin-top:2px">${esc(di.title||"")}</h3>
+      <div class="small muted">${toHHMM(toMin(d.start))} to ${toHHMM(end)} · ${d.items.length} items${total?" · "+eur(total):""}</div></div>
+      <label class="small" for="cal-start" style="flex:none">Day starts<input id="cal-start" type="time" value="${esc(toHHMM(toMin(d.start)))}" style="padding:8px 10px;width:auto"></label></div>
+    <ol class="tl" data-drop="${d.day}" data-list="${d.day}">${d.items.map((x,i)=>{ const st=t; t+=x.dur; const ty=TYPES[x.type]||TYPES.activity;
+      return `<li class="ev" draggable="true" data-id="${x.id}" style="--c:${ty[1]}">
+        <div class="ev-time num"><b>${toHHMM(st)}</b><span>${toHHMM(t)}</span></div>
+        <div class="ev-body"><div class="ev-top"><span class="ev-type">${ty[0]}</span>${x.cost?`<span class="num ev-cost">${eur(x.cost)}</span>`:""}</div>
+          <b>${esc(x.title)}</b>${x.note?`<div class="small muted">${esc(x.note)}</div>`:""}
+          <div class="ev-ctl">
+            <button type="button" data-up="${x.id}" ${i===0?"disabled":""} aria-label="Earlier">↑</button>
+            <button type="button" data-down="${x.id}" ${i===d.items.length-1?"disabled":""} aria-label="Later">↓</button>
+            <select data-dur="${x.id}" aria-label="Duration">${[15,30,45,60,90,120,150,180,240,300].concat([x.dur]).filter((v,j,a)=>a.indexOf(v)===j).sort((a,b)=>a-b).map(m=>`<option value="${m}" ${m===x.dur?"selected":""}>${m<60?m+" min":(m/60)+" h"}</option>`).join("")}</select>
+            <select data-move="${x.id}" aria-label="Move to another day"><option value="">Move to…</option>${sched().filter(o=>o.day!==d.day).map(o=>`<option value="${o.day}">Day ${o.day} · ${esc(dayDate(o.day))}</option>`).join("")}</select>
+            <button type="button" data-delitem="${x.id}" aria-label="Remove ${esc(x.title)}" class="ev-del">×</button>
+          </div></div></li>`}).join("")}</ol>
+    ${calNew===d.day ? `<form class="expform" id="addItem">
+        <label for="ni-title">What<input id="ni-title" required maxlength="60" placeholder="e.g. Aperitivo in the square"></label>
+        <div class="row"><label for="ni-dur">Duration<select id="ni-dur">${[30,45,60,90,120,180].map(m=>`<option value="${m}" ${m===60?"selected":""}>${m<60?m+" min":(m/60)+" h"}</option>`).join("")}</select></label>
+        <label for="ni-type">Type<select id="ni-type">${Object.entries(TYPES).map(([k,v])=>`<option value="${k}">${v[0]}</option>`).join("")}</select></label>
+        <label for="ni-cost">Cost (EUR)<input id="ni-cost" type="number" min="0" step="1" value="0"></label></div>
+        <div class="row"><button class="btn-ghost" type="button" id="ni-cancel">Cancel</button><button class="btn-primary" type="submit">Add to day ${d.day}</button></div></form>`
+      : `<button type="button" class="btn-ghost" id="addItemBtn">+ Add activity</button>`}
+    <p class="small muted" style="margin:0">Times are Bob's suggestion. Drag a card onto another day at the top, or use the arrows and "Move to…".</p>`;
+}
+function bindCal(){
+  const d = sched().find(x=>x.day===calSel);
+  document.querySelectorAll("[data-sel]").forEach(b=>b.onclick=()=>{ calSel=+b.dataset.sel; calNew=null; renderCal(); });
+  $("#cal-start").onchange = e => { d.start = e.target.value || "09:00"; save(); renderCal(); };
+  document.querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>{ const f=findItem(b.dataset.up); moveItem(b.dataset.up, f.d.day, f.i-1); });
+  document.querySelectorAll("[data-down]").forEach(b=>b.onclick=()=>{ const f=findItem(b.dataset.down); moveItem(b.dataset.down, f.d.day, f.i+1); });
+  document.querySelectorAll("[data-move]").forEach(sl=>sl.onchange=()=>{ if(!sl.value) return; const to=+sl.value; moveItem(sl.dataset.move, to, 999); });
+  document.querySelectorAll("[data-dur]").forEach(sl=>sl.onchange=()=>{ const f=findItem(sl.dataset.dur); f.d.items[f.i].dur=+sl.value; save(); renderCal(); });
+  document.querySelectorAll("[data-delitem]").forEach(b=>b.onclick=()=>{ const f=findItem(b.dataset.delitem); f.d.items.splice(f.i,1); save(); renderCal(); });
+  const ab=$("#addItemBtn"); if(ab) ab.onclick=()=>{ calNew=calSel; renderCal(); $("#ni-title").focus(); };
+  const af=$("#addItem"); if(af){ $("#ni-cancel").onclick=()=>{ calNew=null; renderCal(); };
+    af.onsubmit=e=>{ e.preventDefault(); d.items.push({id:uid(), title:$("#ni-title").value.trim(), dur:+$("#ni-dur").value, type:$("#ni-type").value, cost:+$("#ni-cost").value||0}); calNew=null; save(); renderCal(); }; }
+  // drag and drop (desktop): onto a day tab = move to that day; within the list = reorder
+  document.querySelectorAll(".ev").forEach(el=>{
+    el.addEventListener("dragstart", e=>{ dragId=el.dataset.id; el.classList.add("dragging"); e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain", dragId); }catch(_){} });
+    el.addEventListener("dragend", ()=>{ el.classList.remove("dragging"); document.querySelectorAll(".dropover").forEach(x=>x.classList.remove("dropover")); dragId=null; });
+  });
+  document.querySelectorAll(".calday").forEach(tab=>{
+    tab.addEventListener("dragover", e=>{ if(!dragId) return; e.preventDefault(); tab.classList.add("dropover"); });
+    tab.addEventListener("dragleave", ()=>tab.classList.remove("dropover"));
+    tab.addEventListener("drop", e=>{ e.preventDefault(); if(dragId) moveItem(dragId, +tab.dataset.drop, 999); });
+  });
+  const list=document.querySelector(".tl");
+  list.addEventListener("dragover", e=>{ if(!dragId) return; e.preventDefault();
+    const after=[...list.querySelectorAll(".ev:not(.dragging)")].find(c=>e.clientY < c.getBoundingClientRect().top + c.offsetHeight/2);
+    const dragging=list.querySelector(".dragging"); if(dragging){ if(after) list.insertBefore(dragging, after); else list.appendChild(dragging); } });
+  list.addEventListener("drop", e=>{ e.preventDefault(); if(!dragId) return;
+    const order=[...list.querySelectorAll(".ev")].map(x=>x.dataset.id);
+    if (order.includes(dragId)) { d.items.sort((a,b)=>order.indexOf(a.id)-order.indexOf(b.id)); save(); renderCal(); } });
+}
+
+function resetDemo(){ S = {trip:buildExample(), variant:"best", expenses:[], chat:[], today:1, booked:{}, members:["Henry","Julia"], schedule:null}; save(); }
+
+// ---------- booking: Bob hands each item to the official seller, prefilled where the seller allows it
+const TRIP_DATES = {start:"2027-07-06", base2:"2027-07-10", end:"2027-07-12"};   // demo dates: summer 2027
+const tripStart = () => (S.trip && !S.trip.example && S.trip.startDate) || TRIP_DATES.start;
+const dayDate = n => { const d=new Date(tripStart()+"T12:00:00"); d.setDate(d.getDate()+n-1); return d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}); };
+const dayOf = word => (S.trip.itinerary.find(d=>d.title.includes(word))||{}).day;
+const isoOf = n => { const d=new Date(tripStart()+"T12:00:00"); d.setDate(d.getDate()+n-1); return d.toISOString().slice(0,10); };
+// The to-do list is built from the CURRENT plan, so Bob's changes (cheaper, rain swap) show up here.
+function TODOS(){
+  if (!S.trip.example) {
+    const t=S.trip, when = b => b.day ? (b.dayEnd && b.dayEnd!==b.day ? `${dayDate(b.day)} to ${dayDate(b.dayEnd)}` : dayDate(b.day)) : "before the trip";
+    const order = ["Book first","Before you go","On the trip"];
+    const groups = order.map(g=>({group:g, items:(t.bookings||[]).filter(b=>(order.includes(b.group)?b.group:"Before you go")===g)
+      .map(b=>({id:b.id, ref:b.priceId, what:b.what, when:when(b), price:b.price, who:b.who||"seller", url:b.url, tip:b.tip||"", cat:b.cat}))}));
+    groups[2].items.push(...(t.onTrip||[]).map((o,i)=>({id:"trip"+i, what:o.what, when:o.day?dayDate(o.day):"during the trip", price:0, tip:o.tip||""})));
+    return groups.filter(g=>g.items.length);
+  }
+  const it=S.trip.itinerary, last=it.length, ds=dayOf("Seceda"), dsi=dayOf("Siusi"), db=dayOf("Braies"), dt=dayOf("Tre Cime"), dc=dayOf("Cinque");
+  const siusiOne = !!(it.find(d=>d.title.includes("Siusi"))||{}).demoCheap;
+  return [
+    {group:"Book first", items:[
+      {id:"train", what:"Book the train Munich → Bolzano and back", when:`${dayDate(1)} and ${dayDate(last)}`, price:P("train")*4, who:"Deutsche Bahn",
+       url:`https://www.bahn.de/buchung/fahrplan/suche#sts=true&so=M%C3%BCnchen%20Hbf&zo=Bolzano%2FBozen&kl=2&r=13:16:KLASSENLOS:2&hd=${TRIP_DATES.start}T08:00:00&hza=D&ar=false&s=true&d=false&fm=false&bp=false`,
+       tip:"Prefilled for 2 adults. Pick a Super Sparpreis Europa fare, they sell out first.", cat:"travel"},
+      {id:"stayK", what:"Book the apartment in Castelrotto, 4 nights", when:`${dayDate(1)} to ${dayDate(5)}`, price:4*P("stayK"), who:"Booking.com",
+       url:`https://www.booking.com/searchresults.html?ss=Castelrotto&checkin=${isoOf(1)}&checkout=${isoOf(5)}&group_adults=2&no_rooms=1`,
+       tip:"Prefilled dates and guests. Bob planned about 95 € a night.", cat:"stay"},
+      {id:"stayT", what:"Book the guesthouse in Toblach, 2 nights", when:`${dayDate(5)} to ${dayDate(last)}`, price:2*P("stayT"), who:"Booking.com",
+       url:`https://www.booking.com/searchresults.html?ss=Toblach&checkin=${isoOf(5)}&checkout=${isoOf(last)}&group_adults=2&no_rooms=1`,
+       tip:"Stay close to the bus station, bus 444 leaves there.", cat:"stay"},
+      {id:"bus444", what:"Reserve bus 444 to Tre Cime, return × 2", when:dayDate(dt), price:P("bus444")*2, who:"Drei Zinnen shuttle",
+       url:"https://www.drei-zinnen.bz/en/ticket", tip:"Online only, the Mobilcard is not valid.", cat:"activities"}
+    ]},
+    {group:"Before you go", items:[
+      {id:"mob7", what:"Buy 2 Mobilcards South Tyrol, 7 days", when:`valid ${dayDate(1)} to ${dayDate(last)}`, price:P("mob7")*2, who:"südtirolmobil",
+       url:"https://www.suedtirolmobil.info/de/tickets/ticketfinder/mobilcard", tip:"Covers every bus and regional train in South Tyrol.", cat:"local"},
+      {id:"secUp", what:"Buy Seceda cable car tickets, up only × 2", when:dayDate(ds), price:P("secUp")*2, who:"Seceda AG",
+       url:"https://www.seceda.it/en/summer", tip:"Hike down to Ortisei, saves 42 €.", cat:"activities"},
+      {id:"siusi", what:`Seiser Alm Bahn tickets, ${siusiOne?"up only":"return"} × 2`, when:dayDate(dsi), price:(siusiOne?21:P("siusi"))*2, who:"Seiser Alm Bahn",
+       url:"https://www.seiseralm.it/en/info-service/mobility/seiser-alm-aerial-cableway-summer.html", tip:siusiOne?"Bob's cheaper plan: walk down through the meadows.":"Buy at the valley station or online.", cat:"activities"},
+      {id:"braies", what:"Reserve a bus 439 slot to Lago di Braies", when:dayDate(db), price:0, who:"Prags tourism",
+       url:"https://www.myprags-dolomites.com/en/important-facts-about-lake-braies/lake-braies-reservation-2026", tip:"Not needed if you arrive before 9:00.", cat:"activities"}
+    ]},
+    {group:"On the trip", items:[
+      {id:"activate", what:"Validate the Mobilcard on the first bus", when:dayDate(1), price:0, tip:"From then it runs 7 days in a row."},
+      {id:"early", what:"Catch an early bus to Lago di Braies", when:dayDate(db), price:0, tip:"Before 9:00 there is no reservation and fewer people."},
+      {id:"torri", what:"Cinque Torri chairlift, pay by card", when:dayDate(dc), price:P("torri")*2, who:"5 Torri",
+       url:"https://5torri.axess.shop/en/Products/Tickets", tip:"Card payment gives 5 % off.", cat:"activities"},
+      {id:"log", what:"Tell Bob what you spend each evening", when:"every day", price:0, tip:"He keeps the rest of the trip in budget."}
+    ]}
+  ];
+}
+function renderBook(){
+  const groups = TODOS(), S_b = (S.booked = S.booked || {});
+  const bookable = groups.flatMap(g=>g.items).filter(i=>i.url);
+  const done = bookable.filter(i=>S_b[i.id]).length, next = bookable.find(i=>!S_b[i.id]);
+  const total = bookable.reduce((a,i)=>a+i.price,0), doneSum = bookable.filter(i=>S_b[i.id]).reduce((a,i)=>a+i.price,0);
+  const srcLine = i => { const x = priceList().find(p=>p.id===(i.ref||i.id)); if(!x) return "";
+    return `<div class="small" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="pill ${x.status==="estimate"?"est":"good"}">${x.status==="live"?"live price":x.status==="verified"?"real price":"estimate"}</span>
+      <span class="muted">${esc(x.unit)} · ${x.url?`<a href="${esc(x.url)}" target="_blank" rel="noopener" style="color:var(--accent)">source: ${esc(x.src)}</a>`:esc(x.src)}</span></div>`; };
+  const item = (i,n) => `<div class="bkitem ${S_b[i.id]?"done":""}">
+      <div class="bkhead"><span class="bknum">${S_b[i.id]?"✓":n}</span><div style="min-width:0"><b>${esc(i.what)}</b><div class="small muted">${esc(i.when)}</div></div><b class="num bkprice">${i.price?eur(i.price):"free"}</b></div>
+      ${srcLine(i)}
+      <div class="small muted">${esc(i.tip)}</div>
+      ${S_b[i.id]
+        ? `<div class="bkdone"><span>✓ Booked</span><button type="button" data-unbook="${i.id}">Undo</button></div>`
+        : `<div class="bkacts"><a class="btn-primary" href="${esc(i.url)}" target="_blank" rel="noopener" data-open="${i.id}">Book on ${esc(i.who)} ↗</a>
+           <button type="button" class="btn-ghost" data-book="${i.id}">${S.opened?.[i.id]?"I booked it ✓":"Mark as booked"}</button></div>`}
+    </div>`;
+  let n=0;
+  const other = S.trip.example ? PRICES.filter(x=>["food","cortina"].includes(x.id)) : priceList().filter(x=>!(S.trip.bookings||[]).some(b=>b.priceId===x.id));
+  $("#bookCard").innerHTML = `
+    <div class="sub" id="liveBox" style="border-color:rgba(127,220,255,.35)"></div>
+    <div><span class="eyebrow">${esc(S.trip.destination)} · ${S.trip.people} people · ${dayDate(1)} to ${dayDate(S.trip.itinerary.length||S.trip.days)} ${tripStart().slice(0,4)}${S.trip.example?" (demo dates)":""}</span><h2>Book</h2></div>
+    <p class="small muted" style="margin:0">For each step you see the price and where it comes from, then the link to book it. Come back and confirm, Bob ticks it off.</p>
+    <div class="row" style="align-items:flex-end"><div><div class="eyebrow">Booked</div><div class="num" style="font-size:24px;font-weight:800">${done} of ${bookable.length}</div></div>
+      <div style="text-align:right"><div class="eyebrow">Paid so far</div><div class="num" style="font-size:24px;font-weight:800">${eur(doneSum)} <span class="small muted">of ${eur(total)}</span></div></div></div>
+    <div class="bar"><span style="width:${bookable.length?done/bookable.length*100:0}%;background:var(--good)"></span></div>
+    ${next?"":`<div class="sub" style="text-align:center"><b style="color:var(--good)">Everything is booked.</b> <span class="small muted">Bob tracks your spending from here.</span></div>`}
+    ${groups.filter(g=>g.group!=="On the trip").map(g=>`<div class="bkgroup"><h3>${esc(g.group)}</h3>${g.items.map(i=>item(i,++n)).join("")}</div>`).join("")}
+    <div class="bkgroup"><h3>On the trip</h3>${(groups.find(g=>g.group==="On the trip")||{items:[]}).items.map(i=>i.url?item(i,++n):`<div class="sub small"><b>${esc(i.what)}</b> · <span class="muted">${esc(i.when)}. ${esc(i.tip)}</span></div>`).join("")}</div>
+    <div class="bkgroup"><h3>No booking needed</h3>${other.map(x=>`<div class="sub small" style="display:flex;flex-direction:column;gap:4px"><div style="display:flex;justify-content:space-between;gap:10px"><b>${esc(x.item)}</b><b class="num">${eur(x.price)}</b></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="pill ${x.status==="estimate"?"est":"good"}">${x.status==="estimate"?"estimate":"live price"}</span><span class="muted">${esc(x.unit||"")}${x.note?" · "+esc(x.note):""}${x.url?` · <a href="${esc(x.url)}" target="_blank" rel="noopener" style="color:var(--accent)">source</a>`:""}</span></div></div>`).join("")}
+      <p class="small muted" style="margin:0">${S.trip.example?`Real prices checked ${CHECKED} on the operators' own websites.`:`Researched by Bob on ${esc(S.trip.checked||"")}. Live prices come from the linked pages, estimates are Bob's.`}</p></div>`;
+  const all = groups.flatMap(g=>g.items);
+  const setBooked = (id, on) => { const it=all.find(i=>i.id===id); S_b[id]=on;
+    S.expenses = S.expenses.filter(e=>e.bk!==id);
+    if (on && it.price) S.expenses.push({amount:it.price,category:it.cat||"activities",note:it.what.replace(/^(Book|Buy|Reserve) (the )?/,""),at:Date.now(),bk:id});
+    save(); renderBook(); };
+  document.querySelectorAll("[data-open]").forEach(a=>a.addEventListener("click",()=>{ S.opened=S.opened||{}; S.opened[a.dataset.open]=true; save(); setTimeout(renderBook,300); }));
+  document.querySelectorAll("[data-book]").forEach(b=>b.onclick=()=>setBooked(b.dataset.book,true));
+  document.querySelectorAll("[data-unbook]").forEach(b=>b.onclick=()=>setBooked(b.dataset.unbook,false));
+  renderLive();
+}
+
+// ---------- scripted demo for the Dolomites example: instant, works without Claude
+function typeOut(el, text){ return new Promise(res=>{ let i=0; const step=()=>{ i=Math.min(text.length,i+4); el.textContent=text.slice(0,i); $("#chatlog").scrollTop=1e9; if(i<text.length) setTimeout(step,12); else res(); }; step(); }); }
+const DEMO = {
+  cheaper(){ const v=variant(), d3=S.trip.itinerary.find(d=>d.day===3);
+    if (d3.demoCheap) return "Already squeezed that one. Next idea: skip the Cinque Torri lift and hike up, that's another 55 € for two.";
+    const lift = (P("siusi")-21)*2;                    // return 30 -> one way 21, per 2 people
+    v.breakdown.activities -= lift; v.breakdown.food -= 50-lift; v.total -= 50;
+    d3.plan = "Bus to Seis, Seiser Alm Bahn up only (21 €), hike down through the meadows, picnic."; d3.cost = 42; d3.demoCheap = true;
+    sysNote(`Day 3: Seiser Alm Bahn one way instead of return, −${lift} €`); sysNote(`Food: one hut meal becomes a picnic, −${50-lift} €`);
+    return `Done, 50 € cheaper. On day 3 you ride the Seiser Alm Bahn up only and walk down, saves ${lift} €. And one hut lunch becomes a supermarket picnic, saves ${50-lift} €. Your plan is now ${eur(v.total)}, so ${eur(S.trip.budget-v.total)} stays free.`; },
+  rain(){ const it=S.trip.itinerary, t=+S.today+1, a=it.find(d=>d.day===t);
+    if(!a) return "Tomorrow you're already home, so rain is someone else's problem.";
+    const later=it.filter(d=>d.day>t); const b=later.find(d=>!d.cost) || later.slice().sort((x,y)=>x.cost-y.cost)[0];
+    if(!b) return "Tomorrow is the last day, so I can't move it. Pack a rain jacket and keep the lift tickets for a dry hour.";
+    const keep={title:a.title,plan:a.plan,cost:a.cost}; Object.assign(a,{title:b.title,plan:b.plan,cost:b.cost}); Object.assign(b,keep);
+    a.plan = "Rain plan: " + a.plan.replace(/^Rain plan: /,"");
+    if (S.schedule) { const sa=S.schedule.find(x=>x.day===a.day), sb=S.schedule.find(x=>x.day===b.day); if(sa&&sb){ [sa.items,sb.items]=[sb.items,sa.items]; [sa.start,sb.start]=[sb.start,sa.start]; } }
+    sysNote(`Day ${a.day} ⇄ day ${b.day} swapped`);
+    return `Rain tomorrow, so I swapped day ${a.day} and day ${b.day}. Tomorrow is now ${a.title}, and ${b.title} moves to day ${b.day} when the forecast is better. No lift tickets wasted, budget unchanged.`; },
+  spent(){ const v=variant();
+    S.expenses.push({amount:30,category:"food",note:"Extra at dinner",at:Date.now(),paidBy:members()[1]||members()[0]}); sysNote("Logged 30 € · Food");
+    v.breakdown.food -= 30; v.total -= 30; sysNote("Food plan for the rest of the trip −30 €");
+    return `Logged 30 € for dinner. To keep the rest in budget I planned two picnic lunches instead of café stops, that's −30 € on food. You've spent ${eur(spent())} so far, and the plan still fits: ${eur(S.trip.budget-v.total)} free.`; },
+  book(){ setTimeout(()=>go("book"), 1600);
+    return `Great, let's book. Train first, cheap fares sell out. Then both stays and bus 444. Passes and lift tickets can wait until just before you go. For each one you'll see the price, where it comes from and the link.`; },
+  pass(){ const singles=RIDES.reduce((a,[,km])=>a+fare(km),0);
+    return `Yes. Paying per ride for your route costs about ${singles.toFixed(2)} € per person, the 7-day Mobilcard ${P("mob7")} €. For two of you that's ${Math.round((singles-P("mob7"))*2)} € saved, and it also makes the cheaper apartment in Castelrotto the better deal. Only bus 444 and the Cortina bus aren't covered.`; }
+};
+async function runDemo(key, label){
+  $("#chatNote").hidden = true;
+  S.chat.push({role:"user",content:label}); bubble("me",label);
+  const out = bubble("bob","Bob is checking your plan..."); demoOut = out;
+  await new Promise(r=>setTimeout(r,700));
+  const text = DEMO[key](); demoOut = null;
+  await typeOut(out, text);
+  S.chat.push({role:"assistant",content:text}); save();
+}
+
+// ---------- chat with Bob
+let chatCtl;
+let demoOut=null;
+function sysNote(msg, before){ before = before || demoOut; S.chat.push({role:"sys",content:msg}); const d=document.createElement("div"); d.className="msg sys"; d.textContent=msg; if(before) before.before(d); else $("#chatlog").append(d); }
+function bubble(role, text){ const d=document.createElement("div"); d.className="msg "+role; d.textContent=text; $("#chatlog").append(d); $("#chatlog").scrollTop=1e9; return d; }
+function renderChat(){
+  $("#chatlog").innerHTML = "";
+  if (!S.trip) { bubble("bob", "Hey, I'm Bob. No trip yet. Tell me where you'd like to go and your budget, or tap Plan a trip on the Trip tab."); S.chat.forEach(m => bubble(m.role==="user"?"me":m.role==="sys"?"sys":"bob", m.content)); return; }
+  bubble("bob", S.chat.length ? "Back again. What do you need?" : `Hey, I'm Bob. Your plan for ${S.trip.destination} costs ${eur(variant().total)}, so ${eur(S.trip.budget - variant().total)} of your budget is still free, and you've spent ${eur(spent())} so far. Tell me what you spent, ask me to make it cheaper, or warn me about rain and I'll rework the plan.`);
+  S.chat.forEach(m => bubble(m.role==="user"?"me":m.role==="sys"?"sys":"bob", m.content));
+}
+function context(){
+  if (!S.trip) return "You are Bob, a funny, warm budget travel buddy for students. The user has no trip planned yet. Help them pick a destination and budget; suggest they use 'Plan a trip' on the Trip tab. You can look things up live with web_search and read_webpage if those tools exist. Keep answers short.";
+  const t=S.trip, v=variant();
+  return `You are Bob, the friend in the travel group who always keeps an eye on the money. Funny, warm, short (max 4 sentences unless asked for a list), plain words, no emoji spam. You plan around the WHOLE stay: passes vs single tickets, cheaper stays further out incl. transport, cheap eats and local deals. Never invent exact prices as facts; say "about" and suggest checking. You can look things up LIVE with web_search and read_webpage (the user's browser; each site is approved by the user). Use them when the user asks about current prices, availability or anything not in the price list; give the source URL with every live number. If the user mentions money they spent, call log_expense once per spend. When asked to make the trip cheaper, to react to weather, delays or closed activities, or to keep the rest of the trip in budget after overspending, CHANGE the plan with the tools: set_category (new planned amount for a cost category of the chosen plan) and set_day (rewrite a day's title, plan and cost; move outdoor days away from rain by swapping content between days). Only change upcoming days (today and later). Afterwards say in 2-3 sentences what you changed and the new amount left.
+Today is day ${S.today} of the trip.
+${priceList().length?`Price list (use these exact numbers, say "estimate" for anything marked estimate or not on the list): ${JSON.stringify(priceList().map(x=>({item:x.item,price:x.price,unit:x.unit,status:x.status,note:x.note})))}
+`:"Prices in this trip are AI estimates; say so when it matters.\n"}Current trip (JSON): ${JSON.stringify({destination:t.destination,from:t.from,people:t.people,days:t.days,budget:t.budget,month:t.month,style:t.style,chosenPlan:v,decisions:t.decisions,itinerary:t.itinerary,deals:t.deals}).slice(0,9000)}
+Group members: ${members().join(", ")}. Planned total of chosen plan: ${eur(v.total)}. Spent so far: ${eur(spent())}. Left to spend: ${eur(t.budget-spent())}. Spent per category: ${JSON.stringify(Object.fromEntries(CATS.map(([k])=>[k,spentBy(k)])))}.`;
+}
+async function send(text){
+  text = text.trim(); if(!text) return;
+  const sample = await window.claude?.use?.("sample").catch(()=>null);
+  const note = $("#chatNote");
+  if (!sample) { note.hidden=false; note.textContent="Bob's AI isn't switched on yet. Follow Stage 2 of the setup guide."; return; }
+  note.hidden = true;
+  S.chat.push({role:"user",content:text}); bubble("me",text); $("#chatIn").value="";
+  const out = bubble("bob","Thinking..."); $("#sendBtn").disabled=true;
+  chatCtl = new AbortController();
+  const turns = S.chat.filter(m=>m.role!=="sys").slice(-16).map(m=>({role:m.role,content:m.content}));
+  const caps = await sample.limits().catch(()=>null);
+  const tools = caps?.tools ? [{
+    name:"log_expense",
+    description:"Log money the group just spent. Returns the new amount left to spend.",
+    inputSchema:{type:"object",properties:{amount:{type:"number",description:"EUR"},category:{type:"string",enum:CATS.map(c=>c[0])},note:{type:"string"},paidBy:{type:"string",description:"Group member who paid: "+members().join(", ")}},required:["amount","category"]},
+    execute:(inp)=>{ const a=Number(inp.amount); if(!(a>0)) throw new Error("amount must be positive");
+      const cat = CATS.some(c=>c[0]===inp.category)?inp.category:"food";
+      S.expenses.push({amount:a,category:cat,note:String(inp.note||""),at:Date.now(),paidBy:members().includes(String(inp.paidBy))?String(inp.paidBy):members()[0]});
+      sysNote(`Logged ${eur(a)} · ${(CATS.find(c=>c[0]===cat)||[])[1]}`, out); save();
+      return {logged:a, left_to_spend:Math.round(S.trip.budget-spent())}; }
+  },{
+    name:"set_category",
+    description:"Set the planned amount (EUR, whole group) for one cost category of the chosen plan. Returns the new plan total and budget left after the plan.",
+    inputSchema:{type:"object",properties:{category:{type:"string",enum:CATS.map(c=>c[0])},amount:{type:"number"},reason:{type:"string"}},required:["category","amount"]},
+    execute:(inp)=>{ const v=variant(); const a=Number(inp.amount); if(!(a>=0)||!CATS.some(c=>c[0]===inp.category)) throw new Error("bad category or amount");
+      const old=v.breakdown[inp.category]||0; v.breakdown[inp.category]=Math.round(a); v.total=CATS.reduce((s,[k])=>s+(Number(v.breakdown[k])||0),0);
+      sysNote(`Plan: ${(CATS.find(c=>c[0]===inp.category)||[])[1]} ${eur(old)} → ${eur(a)}`, out); save();
+      return {new_total:v.total, budget_left_after_plan:S.trip.budget-v.total}; }
+  },{
+    name:"set_day",
+    description:"Rewrite one itinerary day (title, plan, extra cost in EUR for the group). Use it to swap outdoor activities away from rain or replace closed activities. Returns the updated day.",
+    inputSchema:{type:"object",properties:{day:{type:"integer"},title:{type:"string"},plan:{type:"string"},cost:{type:"number"}},required:["day","title","plan","cost"]},
+    execute:(inp)=>{ const d=(S.trip.itinerary||[]).find(x=>+x.day===+inp.day); if(!d) throw new Error("no such day");
+      if(+inp.day < +S.today) throw new Error("that day is already over");
+      d.title=String(inp.title); d.plan=String(inp.plan); d.cost=Math.max(0,Math.round(Number(inp.cost)||0));
+      sysNote(`Day ${d.day} changed: ${d.title}`, out); save(); return d; }
+  },{
+    name:"web_search",
+    description:"Search the web live (DuckDuckGo) through the user's browser. Returns result titles, links and snippets as text. Use for current prices, opening times, deals. The user approves each website.",
+    inputSchema:{type:"object",properties:{query:{type:"string"}},required:["query"]},
+    execute: async (inp)=>{ sysNote(`Searching: ${String(inp.query).slice(0,60)}`, out); const t = await readWeb("https://html.duckduckgo.com/html/?q="+encodeURIComponent(String(inp.query)), 6000); return t.slice(0,6000); }
+  },{
+    name:"read_webpage",
+    description:"Open one web page (full https URL) in the user's browser and return its visible text. Prefer official operator pages. Quote the URL when you give a price.",
+    inputSchema:{type:"object",properties:{url:{type:"string"}},required:["url"]},
+    execute: async (inp)=>{ const u=String(inp.url); if(!/^https:\/\//.test(u)) throw new Error("need a full https URL"); sysNote(`Reading ${u.replace(/^https:\/\//,"").slice(0,50)}`, out); return (await readWeb(u, 12000)).slice(0,12000); }
+  }] : undefined;
+  try {
+    const opts = {signal:chatCtl.signal, onText:({text})=>{out.textContent=text; $("#chatlog").scrollTop=1e9;}};
+    if (tools) opts.tools = tools; else opts.cache = false;
+    const r = await sample([{role:"user",content:context()},...turns], opts);
+    S.chat.push({role:"assistant",content:r.text}); save();
+  } catch(x) {
+    if (x?.text) { out.textContent = x.text; S.chat.push({role:"assistant",content:x.text}); save(); }
+    else out.remove();
+    if (x?.code!=="cancelled") { note.hidden=false; note.textContent=errCopy(x?.code); }
+  } finally { $("#sendBtn").disabled=false; }
+}
+$("#chatForm").onsubmit = e => { e.preventDefault(); send($("#chatIn").value); };
+$("#chatIn").addEventListener("keydown", e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); send($("#chatIn").value); } });
+document.querySelectorAll("#chips button").forEach(b=>b.onclick=()=> (S.trip?.example && DEMO[b.dataset.demo]) ? runDemo(b.dataset.demo, b.textContent) : send(b.textContent));
+
+go("home");
+})();
+</script>
+
+</body>
+</html>

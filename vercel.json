@@ -1,0 +1,3 @@
+{
+  "functions": { "api/bob.js": { "maxDuration": 60 } }
+}
